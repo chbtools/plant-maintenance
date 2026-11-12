@@ -1,0 +1,7 @@
+{
+  "name": "plant-maintenance",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/logic.test.js"
+  }
+}
