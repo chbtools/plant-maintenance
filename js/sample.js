@@ -223,6 +223,7 @@
     keep(PM.saveTime(s, { workOrderId: floorWo, techId: tech("Jordan Ellis"), hours: 1, date: d(0), notes: "Started the grease pass", now: at(0, "16:20:00") }));
     keep(PM.saveTime(s, { assetId: asset("WL-1"), techId: tech("Jordan Ellis"), hours: 0.5, date: d(0), notes: "Swept the pit, no work order", now: at(0, "17:40:00") }));
 
+    if (PM.seedFeatures) s = PM.seedFeatures(s, today);
     return s;
   };
 })();

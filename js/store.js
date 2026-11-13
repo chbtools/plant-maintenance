@@ -4,7 +4,7 @@
    Big saves are split into MAX_BATCH pieces so an older script still accepts them. */
 (function () {
   const PM = globalThis.PM;
-  const SAMPLE_KEY = "pm-sample-v1";
+  const SAMPLE_KEY = "pm-sample-v2";
   const CACHE_KEY = "pm-cache-v1";
   const QUEUE_KEY = "pm-queue-v1";
   const CODE_KEY = "pm-code";
@@ -72,6 +72,14 @@
   async function deliver(item) {
     await call("batch", { batchId: item.batchId, ops: item.ops });
   }
+  async function uploadPhoto(dataUrl, name) {
+    if (!scriptUrl()) return { ok: true, fallback: true, dataUrl: dataUrl };
+    return call("photo", { dataUrl: dataUrl, name: name || "photo" });
+  }
+  async function notify(subject, body) {
+    if (!scriptUrl()) return { ok: true, skipped: true };
+    return call("notify", { subject: subject, body: body });
+  }
   function unpack(j) {
     const state = PM.emptyState();
     for (const name of Object.keys(PM.FIELDS)) state[name] = Array.isArray(j[name]) ? j[name] : [];
@@ -109,6 +117,8 @@
       };
     },
     saveCode(v) { try { localStorage.setItem(CODE_KEY, v || ""); } catch (e) {} },
+    uploadPhoto,
+    notify,
     remember(state) {
       const key = scriptUrl() ? CACHE_KEY : SAMPLE_KEY;
       const payload = scriptUrl() ? { state, savedAt: new Date().toISOString() } : state;

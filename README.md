@@ -125,6 +125,101 @@ On-hand in the **parts** tab of the sheet is the live count. Change stock from t
 | timeLogs | Hours by tech |
 | readings | Meter readings |
 | moves | Stock history (received, used, returned, counted) |
+| settings | Digest email, alert email, hour |
+| failureCodes | The list used when a job is closed |
+| photos | Photo rows. The file itself is in Drive when that worked |
+| downtimeEvents | Machine-down clock, start and stop |
+| checkTemplates, checkItems | Inspection checklists |
+| inspections, inspectionLines | A completed round, and any work order a failed line opened |
+| sensorLimits, sensorLogs | Limits and readings, including ESP32 posts |
+| lotoPoints | Lockout / tagout points per machine |
+| warranties | Coverage and the date it ends |
+| outsideJobs | Vendor repairs: estimate, PO, cost, status |
+| schedules | Who has which job on which day |
+| reservations | Parts kit reserved when a PM work order opens |
+
+New tabs appear the first time the updated script runs (open the app, or run **setup** once from the editor). New columns are added to the end of an existing tab. Don't rename the header row.
+
+## Floor tools
+
+Everything below is turned on so you can see it. **Floor → Settings** (or **More → Settings**) has a checkbox for each one. Uncheck it to take it off the menus. The records stay.
+
+### QR tags
+
+**Floor → Print QR labels** makes one label or a sheet of them. Each code opens that machine's page (`#asset/` plus its id), which is also where the lockout sheet is. **Floor → Scan a QR** uses the camera on Chrome for Android. Other browsers can type the tag. Printing uses the browser's print dialog (choose Save as PDF if you want a file).
+
+### Photos
+
+On a work order, pick Before, After, Nameplate, or Part number and take a picture. The phone shrinks it first. With the sheet connected, the script saves the file in a Drive folder named **Plant Maintenance Photos** and stores the link on the photos tab. If Drive isn't authorized, it keeps a compressed copy in the sheet instead so the picture isn't lost.
+
+### Failure codes
+
+When you tap **Complete**, pick a code (worn, broken, operator, electrical, air leak, lubrication, other) and a short root cause. **Floor → Failure codes** is where you add or remove codes.
+
+### Morning digest and Today
+
+**Floor → Today** is the same list on the phone: overdue PMs, machines that are down, late work orders, low stock, and warranties expiring in 30 days. The email is the same idea. Set the address under **Settings**, redeploy the script, then in Apps Script choose the function **installDigestTrigger** and click **Run** once. That adds a daily 6am trigger. It does not change the web app URL. The email does not contain the plant code.
+
+### Inspections
+
+**Floor → Inspections**. Build a checklist (daily compressor round, dryer round). Run it on a machine. Any line you mark Fail opens a work order on that machine.
+
+### Machine down
+
+On the machine page, **Machine down** sets the status to Down, starts a clock, and writes a downtime event. If an alert email is saved, the script sends that address a note. **Back up** stops the clock and records the minutes.
+
+### Compressor room
+
+**Floor → Compressor room** shows pressure, temperature, dew point, and the limits you set on the machine (low and high). A reading outside the limits is flagged. You can log a number by hand, or an ESP32 can post it.
+
+### Repeat offenders
+
+**Floor → Repeat offenders** lists machines by job count, downtime hours, and cost for 30 or 90 days. **Reorder CSV** downloads the parts that are at or under the reorder point.
+
+### Lockout / tagout
+
+On the machine page, under **Lockout / tagout**, list each energy source and how to isolate it. Optional photo. Scanning the QR label opens this same page.
+
+### Vendors and warranty
+
+On the machine: what is covered, who the vendor is, and the end date. **Floor → Vendors and warranty** lists anything expiring in the next 30 days. Outside service is a log of estimate number, PO, cost, and status (quoted, approved, in shop, back, closed).
+
+### Weekly schedule
+
+**Floor → Weekly schedule**. Tap a day under a tech and pick an open work order. That sets the due date and the assignment.
+
+### ESP32 sensor tie-in
+
+The script accepts `action: "sensor"` with the plant code, an asset tag, a name, a type, and a value. It stores the reading, compares it to that machine's limits, and emails the alert address if it's out of range. Types `hours`, `meter`, and `cycles` also update the hour meter, which moves PM due dates. A starter sketch is in `examples/esp32-sensor.ino`. Put your own code and URL in the sketch. Don't commit the real plant code. The sketch prints only the HTTP status, not the code.
+
+### Parts kits
+
+The parts on a PM task are the kit. When you **Make work order**, those parts are reserved to that job and pulled from stock (the on-hand count drops, and a reservation row says `issued`). **Reorder CSV** is the shopping list.
+
+### Monthly one-pager
+
+**Floor → Monthly one-pager** shows uptime, the percent of PM tasks that are currently on time, cost by area, and the top offenders. **Print / PDF** uses the browser print dialog.
+
+## Updating the Google script
+
+Do this whenever `Code.gs` in this repo changes. The page on GitHub Pages updates by itself. The sheet does not.
+
+1. Open the Plant Maintenance sheet. Click **Extensions → Apps Script**.
+2. Select everything in the editor and delete it. Paste in the whole new `Code.gs`.
+3. The file says `const ACCESS_CODE = 'CHANGE-ME'`. Put your real plant code back on that line. Do not leave `CHANGE-ME`.
+4. Click **Save**.
+5. Click **Deploy → Manage deployments**.
+6. On the web app that is already there, click the pencil (**Edit**). Do not make a new deployment.
+7. Set **Version** to **New version**. Leave **Execute as: Me** and **Who has access: Anyone**.
+8. Click **Deploy**. The address should stay the same and still end in `/exec`. You do not need to change `index.html` if it didn't.
+
+The first time you save a photo, send an alert, or run the digest, Google asks for more permission:
+
+- **Drive** — to create the Plant Maintenance Photos folder and store pictures.
+- **Gmail** (sending email as you) — for the morning digest, the machine-down note, and an out-of-range sensor.
+- **Script triggers** — only if you run **installDigestTrigger** from the editor. That is a daily timer, not a new web address.
+
+Run **setup** once from the editor if you want the new tabs created before anyone opens the app. Opening the app also creates them.
 
 ## Later changes
 

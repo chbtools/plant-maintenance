@@ -39,13 +39,28 @@
     assets: ["id", "tag", "name", "area", "type", "make", "model", "year", "serial", "status", "metered", "meterType", "meter", "notes", "createdAt", "updatedAt"],
     levels: ["id", "assetId", "name", "basis", "everyDays", "everyMeter", "active", "notes", "createdAt"],
     pmTasks: ["id", "assetId", "levelId", "name", "instructions", "partsJson", "active", "lastCompletedAt", "lastMeter", "lastWoId", "createdAt"],
-    workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "createdAt", "updatedAt"],
+    workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "failureCode", "rootCause", "createdAt", "updatedAt"],
     parts: ["id", "sku", "name", "description", "bin", "onHand", "reorderPoint", "reorderQty", "unitCost", "vendor", "notes", "createdAt", "updatedAt"],
     fits: ["id", "partId", "assetId", "notes", "addedBy", "createdAt"],
     uses: ["id", "workOrderId", "partId", "assetId", "partSku", "partName", "qty", "unitCost", "extended", "techId", "createdAt"],
     timeLogs: ["id", "workOrderId", "assetId", "techId", "techName", "date", "hours", "rate", "notes", "createdAt"],
     readings: ["id", "assetId", "workOrderId", "reading", "techId", "date", "notes", "createdAt"],
-    moves: ["id", "partId", "qty", "reason", "workOrderId", "note", "onHandAfter", "createdAt"]
+    moves: ["id", "partId", "qty", "reason", "workOrderId", "note", "onHandAfter", "createdAt"],
+    settings: ["id", "digestEmail", "digestHour", "alertEmail", "createdAt"],
+    failureCodes: ["id", "name", "active", "sort", "createdAt"],
+    photos: ["id", "workOrderId", "assetId", "kind", "name", "driveFileId", "url", "dataUrl", "techId", "createdAt"],
+    downtimeEvents: ["id", "assetId", "assetTag", "workOrderId", "startedAt", "endedAt", "minutes", "open", "note", "createdAt"],
+    checkTemplates: ["id", "name", "assetId", "notes", "active", "createdAt"],
+    checkItems: ["id", "templateId", "sort", "text", "createdAt"],
+    inspections: ["id", "templateId", "assetId", "techId", "date", "status", "notes", "createdAt"],
+    inspectionLines: ["id", "inspectionId", "itemId", "text", "result", "note", "workOrderId", "createdAt"],
+    sensorLimits: ["id", "assetId", "name", "unit", "low", "high", "active", "createdAt"],
+    sensorLogs: ["id", "assetId", "assetTag", "name", "unit", "value", "type", "date", "source", "flag", "note", "createdAt"],
+    lotoPoints: ["id", "assetId", "name", "energy", "howToIsolate", "photoData", "sort", "createdAt"],
+    warranties: ["id", "assetId", "vendor", "what", "expires", "notes", "createdAt"],
+    outsideJobs: ["id", "assetId", "vendor", "estimate", "po", "cost", "status", "openedDate", "notes", "createdAt"],
+    schedules: ["id", "date", "techId", "workOrderId", "pmTaskId", "note", "createdAt"],
+    reservations: ["id", "workOrderId", "pmTaskId", "partId", "qty", "status", "createdAt"]
   };
 
   const num = v => { const n = typeof v === "number" ? v : parseFloat(String(v == null ? "" : v).replace(/[$,]/g, "")); return isFinite(n) ? n : 0; };
@@ -90,7 +105,11 @@
   const uid = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
   const clone = v => structuredClone(v);
   const inRange = (date, from, to) => { const d = dayOf(date); return !!d && d >= from && d <= to; };
-  const emptyState = () => ({ techs: [], assets: [], levels: [], pmTasks: [], workOrders: [], parts: [], fits: [], uses: [], timeLogs: [], readings: [], moves: [] });
+  const emptyState = () => ({
+    techs: [], assets: [], levels: [], pmTasks: [], workOrders: [], parts: [], fits: [], uses: [], timeLogs: [], readings: [], moves: [],
+    settings: [], failureCodes: [], photos: [], downtimeEvents: [], checkTemplates: [], checkItems: [], inspections: [], inspectionLines: [],
+    sensorLimits: [], sensorLogs: [], lotoPoints: [], warranties: [], outsideJobs: [], schedules: [], reservations: []
+  });
 
   /* Stock changes travel as a delta or an absolute recount.
      Phones send the change, not the total, so two techs can pull parts
@@ -642,6 +661,8 @@
       wo.source = source;
       wo.voiceTranscript = String(f.voiceTranscript == null ? wo.voiceTranscript || "" : f.voiceTranscript);
       wo.notes = String(f.notes == null ? wo.notes || "" : f.notes);
+      wo.failureCode = f.failureCode != null ? String(f.failureCode) : (wo.failureCode || "");
+      wo.rootCause = f.rootCause != null ? String(f.rootCause) : (wo.rootCause || "");
       wo.updatedAt = now;
       if (!existing) {
         wo.laborHours = 0; wo.laborCost = 0; wo.partsCost = 0; wo.totalCost = round2(wo.otherCost);
@@ -670,6 +691,8 @@
         wo.downtimeHours = round2(f.downtimeHours);
       }
       if (f.otherCost != null) wo.otherCost = round2(f.otherCost);
+      if (f.failureCode != null) wo.failureCode = String(f.failureCode);
+      if (f.rootCause != null) wo.rootCause = String(f.rootCause);
       wo.status = status;
       wo.updatedAt = now;
       if (status === "complete") {
@@ -856,8 +879,16 @@
       else message += " No parts on this PM.";
       const lows = [];
       for (const line of lines) { const p = partById(state, line.partId); const n = p && stockNote(p); if (n) lows.push(n); }
+      if (!state.reservations) state.reservations = [];
+      for (const line of lines) {
+        const part = partById(state, line.partId);
+        if (!part) continue;
+        const resv = { id: uid(), workOrderId: wo.id, pmTaskId: task.id, partId: part.id, qty: round2(line.qty), status: "issued", createdAt: now };
+        state.reservations.push(resv);
+        put(ops, "reservations", resv);
+      }
       if (lows.length) message += " " + lows.join(" ");
-      message += " Due " + fmtShort(wo.dueDate) + ".";
+      message += " Kit reserved and pulled. Due " + fmtShort(wo.dueDate) + ".";
       return { message, woId: wo.id, woNumber: wo.woNumber };
     });
   }

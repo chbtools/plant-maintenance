@@ -4,6 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const PM = require("../js/logic.js");
+const QR = require("../js/qr.js");
+require("../js/features.js");
 require("../js/sample.js");
 
 const DAY = "2026-11-12";
@@ -363,4 +365,61 @@ test("the sheet script claims a batch before stock changes and keeps the placeho
   const cols = applied[1].split(",").map(s => s.replace(/['"\s]/g, "")).filter(Boolean);
   assert.deepEqual(cols.slice(0, 2), ["id", "at"]);
   assert.ok(cols.includes("body"));
+});
+
+test("floor modules: down clock, failure code, inspection, sensor, kit, report", () => {
+  const day = "2026-11-12";
+  const s0 = sample();
+  assert.ok(s0.failureCodes.length >= 7);
+  assert.ok(s0.downtimeEvents.some(e => e.assetTag === "RT-1" && e.open === "yes"));
+  assert.ok(s0.reservations.some(r => r.status === "issued"));
+  assert.ok(s0.inspections.length >= 1);
+  const brief = PM.todayBrief(s0, day);
+  assert.ok(brief.down.some(a => a.tag === "RT-1"));
+  assert.ok(brief.low.some(p => p.sku === "VB-B68"));
+  assert.ok(brief.pms.some(p => p.info.status === "overdue"));
+  assert.ok(brief.expiring.some(w => w.tag === "RT-1"));
+
+  let s = PM.machineDown(s0, { assetId: s0.assets.find(a => a.tag === "PS-12").id, now: day + "T09:00:00.000Z" }).state;
+  assert.equal(s.assets.find(a => a.tag === "PS-12").status, "Down");
+  const up = PM.machineUp(s, { assetId: s.assets.find(a => a.tag === "PS-12").id, now: day + "T10:30:00.000Z" });
+  assert.equal(up.minutes, 90);
+  assert.equal(up.state.assets.find(a => a.tag === "PS-12").status, "Running");
+
+  const wo = s0.workOrders.find(w => w.title === "Hydraulic seep at the turner");
+  const closed = PM.setWoStatus(s0, { id: wo.id, status: "complete", failureCode: "Air leak", rootCause: "Whip hose", date: day });
+  assert.equal(closed.state.workOrders.find(w => w.id === wo.id).failureCode, "Air leak");
+  const added = PM.saveFailureCode(s0, { name: "Belt" });
+  assert.ok(PM.failureCodeNames(added.state).includes("Belt"));
+
+  const ac = s0.assets.find(a => a.tag === "AC-2");
+  const hot = PM.ingestSensor(s0, { assetId: ac.id, name: "Discharge pressure", type: "pressure", value: 140, date: day, source: "esp32" });
+  assert.equal(hot.flag, "high");
+  const hours = PM.ingestSensor(s0, { assetId: ac.id, tag: "AC-2", name: "Run hours", type: "hours", value: 19000, date: day, source: "esp32" });
+  assert.equal(PM.num(hours.state.assets.find(a => a.tag === "AC-2").meter), 19000);
+
+  const tmpl = PM.saveTemplate(PM.emptyState(), { name: "Dryer round", items: ["Drain clear", "Dew point ok"] });
+  const asset = PM.saveAsset(tmpl.state, { tag: "DR-1", name: "Dryer", metered: "no" });
+  const tech = PM.saveTech(asset.state, { name: "Pat", hourlyRate: 20 });
+  const items = tech.state.checkItems;
+  const ran = PM.submitInspection(tech.state, {
+    templateId: tmpl.id, assetId: asset.assetId, techId: tech.state.techs[0].id,
+    lines: [{ itemId: items[0].id, text: items[0].text, result: "fail", note: "Water in the bowl" }, { itemId: items[1].id, text: items[1].text, result: "pass" }]
+  });
+  assert.equal(ran.ok, true, ran.message);
+  assert.equal(ran.opened.length, 1);
+  assert.ok(ran.state.workOrders.some(w => /Drain clear/.test(w.title)));
+
+  const rows = PM.repeatOffenders(s0, day, 90);
+  assert.equal(rows[0].tag, "RT-1");
+  const month = PM.monthlyOnePager(s0, day);
+  assert.ok(month.compliance >= 0 && month.compliance <= 100);
+  assert.ok(month.uptime >= 0 && month.uptime <= 100);
+  assert.match(PM.reorderCsv(s0), /VB-B68/);
+
+  const qr = QR.matrix(PM.assetLink(ac.id).replace(/^.*#/, "https://chbtools.github.io/plant-maintenance/#"));
+  assert.ok(qr.length >= 21);
+  assert.equal(qr[0][0], 1);
+  assert.equal(qr[6][6], 1);
+  assert.equal(qr[0][qr.length - 1], 1);
 });

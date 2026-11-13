@@ -183,7 +183,7 @@
     const raw = (location.hash || "#home").replace(/^#/, "");
     const bits = raw.split("/");
     const name = bits[0] || "home";
-    const known = ["home", "work", "assets", "parts", "pm", "more", "reports", "time", "team", "help", "wo", "asset", "part"];
+    const known = ["home", "work", "assets", "parts", "pm", "more", "reports", "time", "team", "help", "wo", "asset", "part"].concat(window.Floor ? Floor.routes : []);
     if (!known.includes(name)) return { name: "home", id: "" };
     return { name, id: decodeURIComponent(bits.slice(1).join("/") || "") };
   }
@@ -191,6 +191,7 @@
     if (name === "wo") return "work";
     if (name === "asset") return "assets";
     if (name === "part") return "parts";
+    if (window.Floor && Floor.routes.indexOf(name) >= 0) return name === "settings" || name === "codes" ? "more" : "floor";
     if (["reports", "time", "team", "help"].includes(name)) return "more";
     return name;
   }
@@ -215,11 +216,26 @@
     b.innerHTML = notes.map(n => `<div class="banner ${n.kind}" data-sync="${esc(n.code)}">${n.lead ? `<b>${esc(n.lead)}</b> ` : ""}${esc(n.text)}</div>`).join("");
   }
 
+  function floorCtx() {
+    window.__floorState = state;
+    return {
+      view, state, ui, PM, Store, route: route(), esc, sel, pill, toast, openSheet, closeSheet, commit, byId, val,
+      assetChoices, techChoices, meName, sortedAssets, sortedTechs, statusPill, assetPill, download, paint: paintChrome,
+      notify: (subject, body) => {
+        toast(subject);
+        if (Store.mode === "live" && Store.notify) Store.notify(subject, body).catch(() => toast("The email did not send. Check the alert address and that the script was redeployed."));
+      },
+      uploadPhoto: (dataUrl, name) => Store.uploadPhoto ? Store.uploadPhoto(dataUrl, name) : Promise.resolve({ ok: true, fallback: true, dataUrl })
+    };
+  }
   function render() {
     if (ui.me && !PM.techById(state, ui.me)) ui.me = "";
+    window.__floorState = state;
+    if (window.Floor) Floor._ctx = floorCtx();
     paintChrome();
     const r = route();
     try {
+      if (window.Floor && Floor.handles(r.name)) { Floor.render(floorCtx()); return; }
       if (r.name === "home") renderHome();
       else if (r.name === "work") renderWork();
       else if (r.name === "wo") renderWo(r.id);
@@ -244,7 +260,8 @@
     const k = (key, label, value, tone) => `<div class="kpi" data-kpi="${key}"><div class="lab">${label}</div><div class="val ${tone || ""}">${value}</div></div>`;
     const max = d.topAssets[0] ? d.topAssets[0].total : 1;
     view.innerHTML = `
-      ${Store.mode === "sample" ? `<p class="intro">Practice plant: wall line, compressor, gantry, and Randy Johnson's crew. Click around. Reset it anytime under More.</p>` : ""}
+      ${Store.mode === "sample" ? `<p class="intro">Practice plant: wall line, compressor, gantry, and Randy Johnson's crew. Floor tools (QR, inspections, the compressor room) are under Floor.</p>` : ""}
+      ${window.Floor && Floor.shown("today") ? `<p class="note"><a href="#today">Today</a> — ${PM.todayBrief(state, PM.today()).down.length} down, ${PM.todayBrief(state, PM.today()).pms.length} PM due, ${PM.todayBrief(state, PM.today()).late.length} late, ${PM.todayBrief(state, PM.today()).low.length} low stock.</p>` : ""}
       <section class="kpis" aria-label="Plant summary">
         ${k("open", "Open work", d.lateCount ? d.openCount + " · " + d.lateCount + " late" : String(d.openCount), d.lateCount ? "bad" : d.openCount ? "warn" : "")}
         ${k("overdue", "Overdue PMs", String(d.overduePm), d.overduePm ? "bad" : "")}
@@ -335,6 +352,7 @@
             ${times.length ? times.map(t => `<div class="partline"><div><b>${esc(t.techName)}</b> ${esc(t.date)} · ${esc(t.hours)} h<div class="note">${esc(t.notes || "")} ${esc(PM.money(PM.num(t.hours) * PM.num(t.rate)))}</div></div><button class="btn small" type="button" data-action="delete-time" data-id="${esc(t.id)}">Remove</button></div>`).join("") : `<p class="note">No hours logged.</p>`}
             <button class="btn" type="button" data-action="log-time" data-id="${esc(w.id)}">Log time</button>
           </article>
+          ${window.Floor ? Floor.photoPanel(w, esc) : ""}
         </div>
         <div class="stack side">
           <article class="panel">
@@ -407,6 +425,7 @@
               <button class="btn primary" type="button" data-action="new-wo" data-id="${esc(a.id)}">+ Work order</button>
               ${PM.isMetered(a) ? `<button class="btn" type="button" data-action="log-meter" data-id="${esc(a.id)}">Log meter</button>` : ""}
               <button class="btn" type="button" data-action="log-time-asset" data-id="${esc(a.id)}">Log time</button>
+              ${window.Floor ? Floor.assetExtra(a, esc) : ""}
             </div>
           </article>
         </div>
@@ -424,6 +443,7 @@
             ${fits.length ? fits.map(f => { const p = PM.partById(state, f.partId); if (!p) return ""; return `<div class="partline"><div><b>${esc(p.sku)}</b> ${esc(p.name)}<div class="note">On hand ${esc(PM.num(p.onHand))}${PM.num(p.onHand) <= PM.num(p.reorderPoint) ? " · reorder" : ""}${f.notes ? " · " + esc(f.notes) : ""}</div></div><button class="btn small" type="button" data-action="remove-fit" data-id="${esc(f.id)}">Remove</button></div>`; }).join("") : `<p class="note">None yet. When a tech finds a part that belongs here, add it.</p>`}
             <button class="btn" type="button" data-action="add-fit" data-id="${esc(a.id)}">Add a part to this machine</button>
           </article>
+          ${window.Floor ? Floor.assetPanels(a, esc) : ""}
           <article class="panel"><h2>Recent work</h2>
             ${wos.length ? wos.map(w => `<a class="list-link" href="#wo/${esc(w.id)}"><span>${statusPill(w.status)} ${esc(w.woNumber)} ${esc(w.title)}</span><span class="num">${esc(PM.money(PM.woCosts(state, w.id).total))}</span></a>`).join("") : `<p class="note">No work orders yet.</p>`}
           </article>
@@ -439,7 +459,7 @@
     if (q) list = list.filter(p => [p.sku, p.name, p.bin, p.vendor].join(" ").toLowerCase().includes(q));
     view.innerHTML = `
       <div class="toolbar"><div class="chips"><button class="chip" type="button" data-pv="all" aria-pressed="${ui.partView === "all"}">All</button><button class="chip" type="button" data-pv="low" aria-pressed="${ui.partView === "low"}">Low stock</button></div>
-        <input class="grow" id="partQ" type="search" placeholder="Search part number or name" value="${esc(ui.partQ)}" aria-label="Search parts"><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>
+        <input class="grow" id="partQ" type="search" placeholder="Search part number or name" value="${esc(ui.partQ)}" aria-label="Search parts"><button class="btn" type="button" id="reorderBtn">Reorder CSV</button><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>
       ${list.length ? `<div class="cards">${list.map(p => {
         const low = PM.num(p.onHand) <= PM.num(p.reorderPoint);
         const tags = state.fits.filter(f => f.partId === p.id).map(f => (PM.assetById(state, f.assetId) || {}).tag).filter(Boolean);
@@ -447,6 +467,8 @@
           <div class="meta"><span data-onhand="${esc(p.sku)}">On hand ${esc(PM.num(p.onHand))}</span><span>Reorder at ${esc(PM.num(p.reorderPoint))}</span><span>${esc(PM.money(p.unitCost))}</span>${tags.length ? `<span>Fits ${esc(tags.join(", "))}</span>` : ""}</div></a>`;
       }).join("")}</div>` : `<div class="empty"><h3>No parts</h3><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>`}`;
     view.querySelectorAll("[data-pv]").forEach(b => b.addEventListener("click", () => { ui.partView = b.dataset.pv; renderParts(); }));
+    const reorderBtn = byId("reorderBtn");
+    if (reorderBtn) reorderBtn.addEventListener("click", () => download("reorder-list.csv", PM.reorderCsv(state)));
     bindSearch("partQ", v => { ui.partQ = v; renderParts(); });
   }
 
@@ -577,6 +599,8 @@
     view.innerHTML = `
       <div class="me-row"><span>This phone</span>${sel("meSel", ui.me, [["", "Choose your name…"]].concat(sortedTechs().map(t => [t.id, t.name])))}</div>
       <div class="cards">
+        <a class="card" href="#floor"><span class="title">Floor tools</span><span class="note">QR, inspections, compressor room, schedule, downtime, monthly report.</span></a>
+        <a class="card" href="#settings"><span class="title">Settings</span><span class="note">Hide modules you don't want. Digest and alert email.</span></a>
         <a class="card" href="#reports"><span class="title">Reports</span><span class="note">Hours, parts, downtime, cost. Hide fields you don't need.</span></a>
         <a class="card" href="#time"><span class="title">Time</span><span class="note">Hours by tech, on a job or on a machine.</span></a>
         <a class="card" href="#team"><span class="title">Team</span><span class="note">Techs you can assign work to.</span></a>
@@ -703,6 +727,9 @@
       ${asset && PM.isMetered(asset) ? `<div class="f"><label for="cMeter">Meter now (${esc(PM.meterWord(asset))})</label><input id="cMeter" type="number" min="0" step="any" value="${esc(PM.hasNum(asset.meter) ? asset.meter : "")}"><p class="hint">This reading feeds the next PM date.</p></div>` : ""}
       <div class="g2"><div class="f"><label for="cDown">Downtime hours</label><input id="cDown" type="number" min="0" step="0.1" value="${esc(w.downtimeHours || 0)}"></div>
         <div class="f"><label for="cDate">Completed</label><input id="cDate" type="date" value="${esc(PM.today())}"></div></div>
+      <div class="g2"><div class="f"><label for="cFail">Failure code</label>${sel("cFail", w.failureCode || "", [["", "Not set"]].concat(PM.failureCodeNames(state).map(n => [n, n])))}</div>
+        <div class="f"><label for="cRoot">Root cause</label><input id="cRoot" type="text" value="${esc(w.rootCause || "")}" placeholder="What actually caused it" autocomplete="off"></div></div>
+      <p class="note">The code list is under Floor → Failure codes.</p>
       <div class="err" id="formErr" role="alert"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="cSave">Mark complete</button>`,
       () => {
@@ -710,7 +737,8 @@
         wireMic("cMic", "cDone");
         byId("cSave").addEventListener("click", () => commit(PM.setWoStatus(state, {
           id: w.id, status: "complete", workPerformed: val("cDone"), downtimeHours: val("cDown"),
-          completedDate: val("cDate") || PM.today(), meterAt: byId("cMeter") ? val("cMeter") : "", techId: ui.me, date: val("cDate") || PM.today()
+          completedDate: val("cDate") || PM.today(), meterAt: byId("cMeter") ? val("cMeter") : "", techId: ui.me, date: val("cDate") || PM.today(),
+          failureCode: val("cFail"), rootCause: val("cRoot")
         }), { hash: "#wo/" + w.id }));
       });
   }
