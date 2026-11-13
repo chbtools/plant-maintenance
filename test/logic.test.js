@@ -521,6 +521,41 @@ test("voice work order parses several phrasings, including a general task", () =
   assert.match(PM.voiceSummary(general), /no machine/i);
 });
 
+test("voice assignee, urgent, and today", () => {
+  let s = sample();
+  s = PM.saveTech(s, { name: "Michael Smith", hourlyRate: 30 }).state;
+  s = PM.saveTech(s, { name: "Jordan Hale", hourlyRate: 30 }).state;
+  const today = "2026-11-12";
+  const mike = PM.parseVoiceWorkOrder("Work order, panel saw, blade is dull, assign to Mike", s, { today });
+  assert.equal(mike.assignedName, "Michael Smith");
+  assert.equal(mike.assigneeNote, "Assigned to Michael Smith, right?");
+  assert.match(PM.voiceSummary(mike), /Assigned to Michael Smith, right\?/);
+  const heard = PM.parseVoiceWorkOrder("Work order, panel saw, assign to Elana", s, { today });
+  assert.equal(heard.assignedName, "Elena Vasquez");
+  const tie = PM.parseVoiceWorkOrder("Work order, panel saw, assign to Jordan", s, { today });
+  assert.equal(tie.assignedTo, "");
+  assert.match(tie.assigneeNote, /No confident match/);
+  assert.match(PM.voiceSummary(tie), /unassigned/);
+  const none = PM.parseVoiceWorkOrder("Work order, panel saw, assign to Zzzzz", s, { today });
+  assert.equal(none.assignedTo, "");
+  const urgent = PM.parseVoiceWorkOrder("Work order, panel saw, emergency leak today", s, { today });
+  assert.equal(urgent.priority, "High");
+  assert.equal(urgent.dueDate, today);
+  assert.match(PM.voiceSummary(urgent), /priority High/);
+  assert.match(PM.voiceSummary(urgent), /location|priority High/);
+  assert.match(PM.voiceSummary(urgent), /due 2026-11-12/);
+  const asap = PM.parseVoiceWorkOrder("Work order, panel saw, ASAP tomorrow", s, { today });
+  assert.equal(asap.priority, "High");
+  assert.equal(asap.dueDate, "2026-11-13");
+  const low = PM.parseVoiceWorkOrder("Work order, panel saw, priority low, location yard", s, { today });
+  assert.equal(low.priority, "Low");
+  assert.match(low.location, /yard/i);
+  assert.match(PM.voiceSummary(low), /location yard/i);
+  assert.match(PM.voiceSummary(low), /priority Low/);
+  const friday = PM.parseVoiceWorkOrder("Work order, panel saw, Friday night shift", s, { today });
+  assert.equal(friday.dueDate, "");
+});
+
 test("a photo that does not fit is refused and a short one is kept whole", () => {
   const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert.equal(PM.acceptPhotoData("").ok, false);

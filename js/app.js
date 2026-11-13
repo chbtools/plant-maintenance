@@ -1211,7 +1211,8 @@
         ${askMachine ? `<div class="f"><label for="voiceAsset">Which machine?</label>${sel("voiceAsset", "", assetChoices("No machine — save as General"))}<p class="hint">Leave this blank and Save stores it as a General / plant task.</p></div>` : ""}
         ${p.location ? `<p>Location ${esc(p.location)}</p>` : ""}
         <p>${esc(p.description)}</p>
-        <p>Priority ${esc(p.priority)}${p.assignedName ? " · " + esc(p.assignedName) : ""}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
+        <p>Priority ${esc(p.priority || "Normal")}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
+        ${p.assigneeNote ? `<p>${esc(p.assigneeNote)}</p>` : ""}
         <p class="note">Say save, cancel, or change.</p></article>`;
       const hint = byId("voiceHint");
       if (hint) hint.textContent = "Say save to create it, cancel to discard, or change and then the correction.";
