@@ -1,6 +1,9 @@
 {
   "name": "plant-maintenance",
   "private": true,
+  "devDependencies": {
+    "jsqr": "1.4.0"
+  },
   "scripts": {
     "test": "node --test test/logic.test.js test/store.test.js"
   }

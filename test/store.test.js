@@ -33,6 +33,7 @@ function reset() {
   Store.rejected = "";
   Store.unreachable = false;
   Store.authProblem = false;
+  Store.scriptStale = false;
   Store.mode = "live";
   handler = async () => ({ ok: true });
 }
@@ -221,5 +222,25 @@ describe("save queue", { concurrency: false }, () => {
     assert.equal(cleared.ok, true);
     assert.equal(Store.rejected, "");
     assert.equal(localStorage.getItem("pm-notice-v1"), null);
+  });
+
+  test("an old script that does not know a table keeps the save queued", async () => {
+    reset();
+    handler = async () => ({ ok: false, error: "unknown collection" });
+    const saved = await Store.persist(PM.emptyState(), [op("resv0001")]);
+    assert.equal(saved.rejected, undefined);
+    assert.equal(saved.scriptStale, true);
+    assert.equal(saved.queued, true);
+    assert.equal(queue().length, 1);
+    assert.equal(Store.scriptStale, true);
+    assert.match(PM.syncNotices({ mode: "live", pending: 1, scriptStale: true })[0].text, /redeploy/);
+    const flushed = await Store.flush();
+    assert.equal(flushed.scriptStale, true);
+    assert.equal(queue().length, 1);
+    handler = async () => ({ ok: true });
+    const later = await Store.flush();
+    assert.equal(later.ok, true);
+    assert.equal(queue().length, 0);
+    assert.equal(Store.scriptStale, false);
   });
 });

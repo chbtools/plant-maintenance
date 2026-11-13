@@ -19,18 +19,33 @@ const COLUMNS = {
   assets: ['id', 'tag', 'name', 'area', 'type', 'make', 'model', 'year', 'serial', 'status', 'metered', 'meterType', 'meter', 'notes', 'createdAt', 'updatedAt'],
   levels: ['id', 'assetId', 'name', 'basis', 'everyDays', 'everyMeter', 'active', 'notes', 'createdAt'],
   pmTasks: ['id', 'assetId', 'levelId', 'name', 'instructions', 'partsJson', 'active', 'lastCompletedAt', 'lastMeter', 'lastWoId', 'createdAt'],
-  workOrders: ['id', 'woNumber', 'assetId', 'assetTag', 'assetName', 'title', 'description', 'type', 'status', 'priority', 'assignedTo', 'assignedName', 'requestedBy', 'dueDate', 'openedDate', 'completedDate', 'downtimeHours', 'meterAt', 'workPerformed', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'pmTaskId', 'source', 'voiceTranscript', 'notes', 'createdAt', 'updatedAt'],
+  workOrders: ['id', 'woNumber', 'assetId', 'assetTag', 'assetName', 'title', 'description', 'type', 'status', 'priority', 'assignedTo', 'assignedName', 'requestedBy', 'dueDate', 'openedDate', 'completedDate', 'downtimeHours', 'meterAt', 'workPerformed', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'pmTaskId', 'source', 'voiceTranscript', 'notes', 'failureCode', 'rootCause', 'location', 'createdAt', 'updatedAt'],
   parts: ['id', 'sku', 'name', 'description', 'bin', 'onHand', 'reorderPoint', 'reorderQty', 'unitCost', 'vendor', 'notes', 'createdAt', 'updatedAt'],
   fits: ['id', 'partId', 'assetId', 'notes', 'addedBy', 'createdAt'],
   uses: ['id', 'workOrderId', 'partId', 'assetId', 'partSku', 'partName', 'qty', 'unitCost', 'extended', 'techId', 'createdAt'],
   timeLogs: ['id', 'workOrderId', 'assetId', 'techId', 'techName', 'date', 'hours', 'rate', 'notes', 'createdAt'],
   readings: ['id', 'assetId', 'workOrderId', 'reading', 'techId', 'date', 'notes', 'createdAt'],
   moves: ['id', 'partId', 'qty', 'reason', 'workOrderId', 'note', 'onHandAfter', 'createdAt'],
+  settings: ['id', 'digestEmail', 'digestHour', 'alertEmail', 'createdAt'],
+  failureCodes: ['id', 'name', 'active', 'sort', 'createdAt'],
+  photos: ['id', 'workOrderId', 'assetId', 'kind', 'name', 'driveFileId', 'url', 'dataUrl', 'techId', 'createdAt'],
+  downtimeEvents: ['id', 'assetId', 'assetTag', 'workOrderId', 'startedAt', 'endedAt', 'minutes', 'open', 'note', 'createdAt'],
+  checkTemplates: ['id', 'name', 'assetId', 'notes', 'active', 'createdAt'],
+  checkItems: ['id', 'templateId', 'sort', 'text', 'createdAt'],
+  inspections: ['id', 'templateId', 'assetId', 'techId', 'date', 'status', 'notes', 'createdAt'],
+  inspectionLines: ['id', 'inspectionId', 'itemId', 'text', 'result', 'note', 'workOrderId', 'createdAt'],
+  sensorLimits: ['id', 'assetId', 'name', 'unit', 'low', 'high', 'active', 'createdAt'],
+  sensorLogs: ['id', 'assetId', 'assetTag', 'name', 'unit', 'value', 'type', 'date', 'source', 'flag', 'note', 'createdAt'],
+  lotoPoints: ['id', 'assetId', 'name', 'energy', 'howToIsolate', 'photoData', 'sort', 'createdAt'],
+  warranties: ['id', 'assetId', 'vendor', 'what', 'expires', 'notes', 'createdAt'],
+  outsideJobs: ['id', 'assetId', 'vendor', 'estimate', 'po', 'cost', 'status', 'openedDate', 'notes', 'createdAt'],
+  schedules: ['id', 'date', 'techId', 'workOrderId', 'pmTaskId', 'note', 'createdAt'],
+  reservations: ['id', 'workOrderId', 'pmTaskId', 'partId', 'qty', 'status', 'createdAt'],
   applied: ['id', 'at', 'body']
 };
 
-const NUMERIC = ['hourlyRate', 'year', 'meter', 'everyDays', 'everyMeter', 'lastMeter', 'downtimeHours', 'meterAt', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'onHand', 'reorderPoint', 'reorderQty', 'unitCost', 'qty', 'extended', 'hours', 'rate', 'reading', 'onHandAfter'];
-const DATA = ['techs', 'assets', 'levels', 'pmTasks', 'workOrders', 'parts', 'fits', 'uses', 'timeLogs', 'readings', 'moves'];
+const NUMERIC = ['hourlyRate', 'year', 'meter', 'everyDays', 'everyMeter', 'lastMeter', 'downtimeHours', 'meterAt', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'onHand', 'reorderPoint', 'reorderQty', 'unitCost', 'qty', 'extended', 'hours', 'rate', 'reading', 'onHandAfter', 'digestHour', 'sort', 'minutes', 'low', 'high', 'value', 'cost'];
+const DATA = ['techs', 'assets', 'levels', 'pmTasks', 'workOrders', 'parts', 'fits', 'uses', 'timeLogs', 'readings', 'moves', 'settings', 'failureCodes', 'photos', 'downtimeEvents', 'checkTemplates', 'checkItems', 'inspections', 'inspectionLines', 'sensorLimits', 'sensorLogs', 'lotoPoints', 'warranties', 'outsideJobs', 'schedules', 'reservations'];
 
 function doPost(e) {
   let p;
@@ -46,9 +61,15 @@ function handle(p) {
     if (String(p.code || '') !== ACCESS_CODE) return out({ ok: false, error: 'unauthorized' });
     if (p.action === 'list') {
       const body = { ok: true };
-      DATA.forEach(name => { body[name] = readAll(name); });
+      DATA.forEach(function (name) {
+        body[name] = name === 'sensorLogs' ? sensorLogsForPhones() : readAll(name);
+      });
       return out(body);
     }
+    if (p.action === 'photo') return savePhotoFile(p);
+    if (p.action === 'photoGet') return readPhotoFile(p);
+    if (p.action === 'notify') return sendAlert(p);
+    if (p.action === 'sensor') return ingestSensor(p);
     if (p.action === 'batch') return batch(p);
     if (!COLUMNS[p.collection] || p.collection === 'applied') return out({ ok: false, error: 'unknown collection' });
     if (!okId(p.id)) return out({ ok: false, error: 'bad id' });
@@ -237,24 +258,38 @@ function sheet(name) {
       if (NUMERIC.indexOf(c) === -1) r.setNumberFormat('@');
       else if (/Cost|total|unitCost|extended|rate|hourlyRate|stock/i.test(c) || c === 'unitCost' || c === 'extended' || c === 'hourlyRate' || c === 'rate') r.setNumberFormat('$#,##0.00');
     });
-  } else if (name === 'applied') {
-    // Add a new header cell if this tab was created before the body column. Don't rename what's there.
-    const headers = sh.getRange(1, 1, 1, cols.length).getValues()[0];
-    cols.forEach(function (c, i) {
-      if (!headers[i]) sh.getRange(1, i + 1).setValue(c).setFontWeight('bold');
+  } else {
+    // Add headers that this deployment knows about and the tab does not. Don't rename or reorder what's there.
+    const width = Math.max(sh.getLastColumn(), 1);
+    const headers = sh.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h || ''); });
+    cols.forEach(function (c) {
+      if (headers.indexOf(c) === -1) {
+        const col = headers.length + 1;
+        sh.getRange(1, col).setValue(c).setFontWeight('bold');
+        headers.push(c);
+      }
     });
   }
   return sh;
 }
 
-function toObj(cols, row) {
+function headerMap(sh) {
+  const width = Math.max(sh.getLastColumn(), 1);
+  const headers = sh.getRange(1, 1, 1, width).getValues()[0].map(function (h) { return String(h || ''); });
+  const map = {};
+  headers.forEach(function (h, i) { if (h && map[h] == null) map[h] = i; });
+  return { headers: headers, map: map, width: headers.length };
+}
+function cellValue(c, v) {
+  if (v instanceof Date) v = Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  if (NUMERIC.indexOf(c) !== -1) return (v === '' || v === null || v === undefined) ? '' : Number(v);
+  return v === null || v === undefined ? '' : String(v);
+}
+function toObj(cols, row, map) {
   const o = {};
-  cols.forEach((c, i) => {
-    let v = row[i];
-    if (v instanceof Date) v = Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    if (NUMERIC.indexOf(c) !== -1) v = (v === '' || v === null) ? '' : Number(v);
-    else v = v === null ? '' : String(v);
-    o[c] = v;
+  cols.forEach(function (c, i) {
+    const idx = map ? map[c] : i;
+    o[c] = cellValue(c, idx == null ? '' : row[idx]);
   });
   return o;
 }
@@ -263,7 +298,9 @@ function readAll(name) {
   const sh = sheet(name), cols = COLUMNS[name];
   const last = sh.getLastRow();
   if (last < 2) return [];
-  return sh.getRange(2, 1, last - 1, cols.length).getValues().filter(r => r[0] !== '').map(r => toObj(cols, r));
+  const hm = headerMap(sh);
+  const width = Math.max(hm.width, 1);
+  return sh.getRange(2, 1, last - 1, width).getValues().filter(function (r) { return r[0] !== ''; }).map(function (r) { return toObj(cols, r, hm.map); });
 }
 
 function findRow(sh, id) {
@@ -276,20 +313,31 @@ function findRow(sh, id) {
 function readDoc(name, id) {
   const sh = sheet(name), r = findRow(sh, id);
   if (!r) return null;
-  return toObj(COLUMNS[name], sh.getRange(r, 1, 1, COLUMNS[name].length).getValues()[0]);
+  const hm = headerMap(sh);
+  return toObj(COLUMNS[name], sh.getRange(r, 1, 1, Math.max(hm.width, 1)).getValues()[0], hm.map);
 }
 
 function writeDoc(name, id, data) {
   const sh = sheet(name), cols = COLUMNS[name];
   data.id = id;
-  const row = cols.map(c => {
+  const hm = headerMap(sh);
+  const width = Math.max(hm.width, cols.length);
+  const row = new Array(width).fill('');
+  cols.forEach(function (c) {
+    const idx = hm.map[c];
+    if (idx == null) return;
     const v = data[c];
-    if (v === null || v === undefined) return '';
-    if (NUMERIC.indexOf(c) !== -1) return v === '' ? '' : Number(v);
-    return String(v).slice(0, 8000);
+    if (v === null || v === undefined) row[idx] = '';
+    else if (NUMERIC.indexOf(c) !== -1) row[idx] = v === '' ? '' : Number(v);
+    else {
+      var text = String(v);
+      var cap = (c === 'dataUrl' || c === 'photoData') ? 45000 : 8000;
+      if ((c === 'dataUrl' || c === 'photoData') && text.length > cap) throw new Error('photo too large');
+      row[idx] = sheetSafe(text.slice(0, cap));
+    }
   });
   const r = findRow(sh, id) || sh.getLastRow() + 1;
-  sh.getRange(r, 1, 1, cols.length).setValues([row]);
+  sh.getRange(r, 1, 1, width).setValues([row]);
 }
 
 function deleteDoc(name, id) {
@@ -300,4 +348,303 @@ function deleteDoc(name, id) {
 /** Run once from the editor to create the tabs and authorize the script. */
 function setup() {
   DATA.concat(['applied']).forEach(name => sheet(name));
+}
+
+function sheetSafe(v) {
+  var s = String(v == null ? '' : v);
+  if (/^[=+\-@\t\r]/.test(s)) return "'" + s;
+  return s;
+}
+
+/* The photos folder id is stored on the script. A same-named folder that
+   belongs to someone else is never used. Files stay private. */
+function photoFolder() {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'PHOTO_FOLDER_ID';
+  var id = props.getProperty(key);
+  if (id) {
+    try {
+      var existing = DriveApp.getFolderById(id);
+      if (existing && !existing.isTrashed()) return existing;
+    } catch (err) {}
+  }
+  var created = DriveApp.createFolder('Plant Maintenance Photos');
+  props.setProperty(key, created.getId());
+  return created;
+}
+
+/* Photos go to a private Drive folder. The phone loads them back with photoGet,
+   which checks the plant code first. If Drive isn't authorized and the picture
+   still fits in one cell, the full data URL is returned. A picture that does
+   not fit is refused. A cut-off image is never stored. */
+function savePhotoFile(p) {
+  const raw = String(p.dataUrl || '');
+  const comma = raw.indexOf(',');
+  const b64 = comma >= 0 ? raw.slice(comma + 1) : raw;
+  if (!b64) return out({ ok: false, error: 'empty photo' });
+  try {
+    const bytes = Utilities.base64Decode(b64);
+    const blob = Utilities.newBlob(bytes, 'image/jpeg', String(p.name || 'photo').replace(/[^\w.-]+/g, '_') + '.jpg');
+    const file = photoFolder().createFile(blob);
+    return out({ ok: true, driveFileId: file.getId(), url: '', fallback: false });
+  } catch (err) {
+    if (raw.length > 45000) return out({ ok: false, error: 'photo too large' });
+    return out({ ok: true, fallback: true, driveFileId: '', url: '', dataUrl: raw });
+  }
+}
+
+function readPhotoFile(p) {
+  const id = String(p.driveFileId || '');
+  if (!id) return out({ ok: false, error: 'missing photo' });
+  try {
+    const file = DriveApp.getFileById(id);
+    const folderId = photoFolder().getId();
+    var allowed = false;
+    var parents = file.getParents();
+    while (parents.hasNext()) {
+      if (parents.next().getId() === folderId) allowed = true;
+    }
+    if (!allowed) return out({ ok: false, error: 'photo unavailable' });
+    const blob = file.getBlob();
+    const mime = blob.getContentType() || 'image/jpeg';
+    return out({ ok: true, dataUrl: 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes()), name: file.getName() });
+  } catch (err) {
+    return out({ ok: false, error: 'photo unavailable' });
+  }
+}
+
+function alertAddress() {
+  const rows = readAll('settings');
+  const row = rows.filter(function (r) { return r.id === 'plantcfg'; })[0] || {};
+  return String(row.alertEmail || row.digestEmail || '').trim();
+}
+
+function alertWindowMs() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('SENSOR_ALERT_MINUTES') || '60');
+  if (!isFinite(n) || n <= 0) n = 60;
+  return n * 60000;
+}
+
+/* One note per key per window. Cache catches a burst. Script Properties remember
+   the last send after the cache entry expires. */
+function alertAllowed(key) {
+  var props = PropertiesService.getScriptProperties();
+  var full = 'alert:' + key;
+  var now = Date.now();
+  var windowMs = alertWindowMs();
+  var cache = CacheService.getScriptCache();
+  if (cache.get(full)) return false;
+  var last = Number(props.getProperty(full) || '0');
+  if (last && now - last < windowMs) return false;
+  props.setProperty(full, String(now));
+  try { cache.put(full, '1', Math.max(1, Math.min(21600, Math.ceil(windowMs / 1000)))); } catch (err) {}
+  return true;
+}
+
+/* Subjects and bodies are built here from the sheet. The request cannot supply either. */
+function sendAlert(p) {
+  const to = alertAddress();
+  if (!to) return out({ ok: true, skipped: true, message: 'No alert email is saved yet.' });
+  const kind = String(p.kind || '');
+  const asset = p.assetId ? readDoc('assets', p.assetId) : findAssetByTag(p.tag);
+  if (!asset) return out({ ok: false, error: 'unknown asset' });
+  let subject = '';
+  let body = '';
+  if (kind === 'machine-down') {
+    if (!alertAllowed('down:' + asset.id)) return out({ ok: true, skipped: true, message: 'Down alert already sent.' });
+    subject = 'Machine down: ' + asset.tag;
+    body = asset.tag + ' ' + asset.name + ' was marked down. The downtime clock is running.';
+  } else if (kind === 'machine-up') {
+    if (!alertAllowed('up:' + asset.id)) return out({ ok: true, skipped: true, message: 'Up alert already sent.' });
+    subject = 'Machine back up: ' + asset.tag;
+    body = asset.tag + ' ' + asset.name + ' is back up.';
+  } else if (kind === 'sensor-range') {
+    if (!alertAllowed('sensor-manual:' + asset.id)) return out({ ok: true, skipped: true, message: 'Range alert already sent.' });
+    subject = 'Reading out of range: ' + asset.tag;
+    body = asset.tag + ' ' + asset.name + ' has a reading outside its limits.';
+  } else return out({ ok: false, error: 'unknown alert' });
+  MailApp.sendEmail(to, subject, body);
+  return out({ ok: true, sent: true });
+}
+
+function findAssetByTag(tag) {
+  const want = String(tag || '').trim().toLowerCase();
+  const rows = readAll('assets');
+  for (let i = 0; i < rows.length; i++) if (String(rows[i].tag || '').trim().toLowerCase() === want) return rows[i];
+  return null;
+}
+
+/* Phones only receive the recent window. Older rows stay on the sheet. */
+function sensorLogsForPhones() {
+  var rows = readAll('sensorLogs');
+  var cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  var iso = Utilities.formatDate(cutoff, Session.getScriptTimeZone() || 'UTC', 'yyyy-MM-dd');
+  var kept = rows.filter(function (r) {
+    var d = String(r.date || r.createdAt || '').slice(0, 10);
+    return d && d >= iso;
+  });
+  kept.sort(function (a, b) { return String(b.createdAt || '').localeCompare(String(a.createdAt || '')); });
+  if (kept.length > 500) kept = kept.slice(0, 500);
+  return kept;
+}
+
+/* ESP32 and the phone both use this. The plant code stays in the request only
+   long enough to check it. It is not stored on the reading. */
+function ingestSensor(p) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return ingestSensorLocked(p); }
+  finally { lock.releaseLock(); }
+}
+
+function ingestSensorLocked(p) {
+  const asset = p.assetId ? readDoc('assets', p.assetId) : findAssetByTag(p.tag);
+  if (!asset) return out({ ok: false, error: 'unknown asset' });
+  const value = Number(p.value);
+  const type = String(p.type || 'other').toLowerCase();
+  const meterLike = type === 'hours' || type === 'meter' || type === 'cycles';
+  if (meterLike) {
+    if (!isFinite(value) || value <= 0) return out({ ok: false, error: 'bad meter' });
+    var metered = String(asset.metered) === 'yes';
+    var current = Number(asset.meter);
+    if (metered && asset.meter !== '' && isFinite(current) && value < current) return out({ ok: false, error: 'meter went backwards' });
+  } else if (!isFinite(value)) return out({ ok: false, error: 'bad value' });
+  const name = String(p.name || type).slice(0, 80);
+  const limits = readAll('sensorLimits').filter(function (l) { return l.assetId === asset.id && String(l.name).toLowerCase() === name.toLowerCase() && String(l.active) !== 'no'; });
+  const limit = limits[0];
+  let flag = 'ok';
+  if (limit && limit.low !== '' && value < Number(limit.low)) flag = 'low';
+  if (limit && limit.high !== '' && value > Number(limit.high)) flag = 'high';
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const day = now.slice(0, 10);
+  const last = lastSensorSample(asset.id, type);
+  const keep = sensorKeepSample(last, { value: value, flag: flag, now: nowMs });
+  var id = '';
+  if (keep.store) {
+    id = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
+    writeDoc('sensorLogs', id, {
+      id: id, assetId: asset.id, assetTag: asset.tag, name: name, unit: (limit && limit.unit) || String(p.unit || ''),
+      value: value, type: type, date: String(p.date || day).slice(0, 10), source: String(p.source || 'esp32'),
+      flag: flag, note: String(p.note || '').slice(0, 500), createdAt: now
+    });
+    if (meterLike && String(asset.metered) === 'yes') {
+      asset.meter = value;
+      asset.updatedAt = now;
+      writeDoc('assets', asset.id, asset);
+      const rid = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
+      writeDoc('readings', rid, { id: rid, assetId: asset.id, workOrderId: '', reading: value, techId: '', date: day, notes: 'Sensor ' + name, createdAt: now });
+    }
+  }
+  const plan = sensorMailPlan(asset.id, type, flag, nowMs);
+  if (plan.send) {
+    const to = alertAddress();
+    if (to) {
+      var subject = asset.tag + ' reading out of range';
+      var body = asset.tag + ' ' + name + ' read ' + value + ' (' + flag + ').';
+      if (plan.send === 'remind') { subject = asset.tag + ' still out of range'; body = asset.tag + ' ' + name + ' is still out of range. It read ' + value + ' (' + flag + ').'; }
+      if (plan.send === 'back') { subject = asset.tag + ' back in range'; body = asset.tag + ' ' + name + ' is back in range. It read ' + value + '.'; }
+      try { MailApp.sendEmail(to, subject, body); } catch (mailErr) {}
+    }
+  }
+  return out({ ok: true, id: id, stored: keep.store, flag: flag, alert: plan.send || '', asset: asset.tag });
+}
+
+function sensorSampleMinutes() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('SENSOR_SAMPLE_MINUTES') || '15');
+  if (!isFinite(n) || n <= 0) n = 15;
+  return n;
+}
+function sensorRemindHours() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('SENSOR_REMIND_HOURS') || '4');
+  if (!isFinite(n) || n <= 0) n = 4;
+  return n;
+}
+function lastSensorSample(assetId, type) {
+  var rows = readAll('sensorLogs');
+  var best = null;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r.assetId) !== String(assetId) || String(r.type) !== String(type)) continue;
+    if (!best || String(r.createdAt) > String(best.createdAt)) best = r;
+  }
+  return best;
+}
+/* Same rules as sensorShouldStore in js/logic.js. */
+function sensorKeepSample(last, sample) {
+  var mins = sensorSampleMinutes();
+  var flag = sample.flag || 'ok';
+  if (!last) return { store: true, reason: 'first' };
+  var prevFlag = last.flag || 'ok';
+  if (flag !== 'ok') return { store: true, reason: 'out' };
+  if (prevFlag !== 'ok') return { store: true, reason: 'back' };
+  var prev = Number(last.value);
+  var next = Number(sample.value);
+  var span = Math.max(0.5, Math.abs(prev) * 0.01);
+  if (isFinite(prev) && isFinite(next) && Math.abs(next - prev) >= span) return { store: true, reason: 'change' };
+  var at = Date.parse(last.createdAt || '');
+  if (!isFinite(at) || sample.now - at >= mins * 60000) return { store: true, reason: 'interval' };
+  return { store: false, reason: 'steady' };
+}
+/* Same rules as sensorAlertPlan in js/logic.js. */
+function sensorMailPlan(assetId, type, flag, now) {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'sensorState:' + assetId + ':' + type;
+  var prev = { flag: 'ok', lastAlert: 0 };
+  try { prev = JSON.parse(props.getProperty(key) || '') || prev; } catch (err) {}
+  var hours = sensorRemindHours();
+  var was = prev.flag || 'ok';
+  var lastAlert = Number(prev.lastAlert) || 0;
+  var send = '';
+  var state = { flag: 'ok', lastAlert: 0 };
+  if (flag !== 'ok' && was === 'ok') { send = 'out'; state = { flag: flag, lastAlert: now }; }
+  else if (flag !== 'ok') {
+    if (now - lastAlert >= hours * 3600000) { send = 'remind'; state = { flag: flag, lastAlert: now }; }
+    else state = { flag: flag, lastAlert: lastAlert };
+  } else if (was !== 'ok') { send = 'back'; state = { flag: 'ok', lastAlert: 0 }; }
+  props.setProperty(key, JSON.stringify(state));
+  return { send: send, state: state };
+}
+
+function digestText() {
+  const day = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  const lines = ['Plant maintenance — ' + day, ''];
+  readAll('assets').forEach(function (a) { if (a.status === 'Down') lines.push('DOWN  ' + a.tag + '  ' + a.name); });
+  readAll('workOrders').forEach(function (w) {
+    if (w.status !== 'complete' && w.status !== 'cancelled' && w.status !== 'draft' && w.dueDate && w.dueDate < day) {
+        var where = w.assetTag || (w.location ? ('No machine · ' + w.location) : 'No machine');
+        lines.push('LATE  ' + w.woNumber + '  ' + where + '  ' + w.title);
+      }
+  });
+  readAll('parts').forEach(function (p) {
+    if (p.onHand !== '' && p.reorderPoint !== '' && Number(p.onHand) <= Number(p.reorderPoint)) lines.push('LOW   ' + p.sku + '  on hand ' + p.onHand + '  reorder ' + p.reorderPoint);
+  });
+  if (lines.length === 2) lines.push('Nothing overdue, down, late, or low.');
+  return lines.join('\n');
+}
+
+/** Time-driven. Run installDigestTrigger once from the editor after you save an email address. */
+function plantDigest() {
+  const to = alertAddress();
+  if (!to) return;
+  MailApp.sendEmail(to, 'Plant maintenance morning digest', digestText());
+}
+
+/** Run once from the editor. It replaces any older digest trigger. Does not change the web app URL. */
+function digestHour() {
+  const rows = readAll('settings');
+  const row = rows.filter(function (r) { return r.id === 'plantcfg'; })[0] || {};
+  let h = parseInt(row.digestHour, 10);
+  if (!isFinite(h) || h < 0 || h > 23) h = 6;
+  return h;
+}
+
+/** Run once from the editor. It replaces any older digest trigger. Does not change the web app URL.
+    The hour is the digest Hour saved in the app, read in the script timezone.
+    Set that timezone to America/New_York (Project settings) or the mail will not arrive at 6am Eastern. */
+function installDigestTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'plantDigest') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('plantDigest').timeBased().everyDays(1).atHour(digestHour()).create();
 }

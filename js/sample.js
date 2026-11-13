@@ -218,11 +218,26 @@
       now: at(0, "17:05:00")
     });
 
+    wo({
+      type: "General / plant task", assetId: "", location: "Break room",
+      title: "Replace the light over the break room door",
+      description: "Bulb is out above the break room door. No machine on this one.",
+      status: "open", priority: "Normal", assignedTo: tech("Jordan Ellis"),
+      requestedBy: "Break room", dueDate: d(5), openedDate: d(0), now: at(0, "09:00:00")
+    });
+    wo({
+      type: "General / plant task", assetId: "", location: "Yard",
+      title: "Move the scrap trailer",
+      description: "Yard wants the scrap trailer pulled before the weekend.",
+      status: "open", priority: "Low", dueDate: d(6), openedDate: d(0), now: at(0, "09:10:00")
+    });
+
     keep(PM.generatePm(s, { taskId: task("Monthly floor line service"), assignedTo: tech("Jordan Ellis"), today, now: at(0, "16:00:00") }));
     const floorWo = s.workOrders.find(w => w.pmTaskId === task("Monthly floor line service")).id;
     keep(PM.saveTime(s, { workOrderId: floorWo, techId: tech("Jordan Ellis"), hours: 1, date: d(0), notes: "Started the grease pass", now: at(0, "16:20:00") }));
     keep(PM.saveTime(s, { assetId: asset("WL-1"), techId: tech("Jordan Ellis"), hours: 0.5, date: d(0), notes: "Swept the pit, no work order", now: at(0, "17:40:00") }));
 
+    if (PM.seedFeatures) s = PM.seedFeatures(s, today);
     return s;
   };
 })();

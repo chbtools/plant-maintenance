@@ -13,7 +13,8 @@
     waiting_approval: "Waiting on approval", on_hold: "On hold", complete: "Complete", cancelled: "Cancelled"
   };
   const PRIORITIES = ["Low", "Normal", "High", "Urgent"];
-  const WO_TYPES = ["Repair", "PM", "Inspection", "Project"];
+  const WO_TYPES = ["Repair", "PM", "Inspection", "Project", "General / plant task"];
+  const GENERAL_TYPE = "General / plant task";
   const ASSET_STATUSES = ["Running", "Down", "Idle", "Out of service"];
   const METER_TYPES = ["Hours", "Cycles", "Miles"];
   const BASES = ["calendar", "meter", "both"];
@@ -39,13 +40,28 @@
     assets: ["id", "tag", "name", "area", "type", "make", "model", "year", "serial", "status", "metered", "meterType", "meter", "notes", "createdAt", "updatedAt"],
     levels: ["id", "assetId", "name", "basis", "everyDays", "everyMeter", "active", "notes", "createdAt"],
     pmTasks: ["id", "assetId", "levelId", "name", "instructions", "partsJson", "active", "lastCompletedAt", "lastMeter", "lastWoId", "createdAt"],
-    workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "createdAt", "updatedAt"],
+    workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "failureCode", "rootCause", "location", "createdAt", "updatedAt"],
     parts: ["id", "sku", "name", "description", "bin", "onHand", "reorderPoint", "reorderQty", "unitCost", "vendor", "notes", "createdAt", "updatedAt"],
     fits: ["id", "partId", "assetId", "notes", "addedBy", "createdAt"],
     uses: ["id", "workOrderId", "partId", "assetId", "partSku", "partName", "qty", "unitCost", "extended", "techId", "createdAt"],
     timeLogs: ["id", "workOrderId", "assetId", "techId", "techName", "date", "hours", "rate", "notes", "createdAt"],
     readings: ["id", "assetId", "workOrderId", "reading", "techId", "date", "notes", "createdAt"],
-    moves: ["id", "partId", "qty", "reason", "workOrderId", "note", "onHandAfter", "createdAt"]
+    moves: ["id", "partId", "qty", "reason", "workOrderId", "note", "onHandAfter", "createdAt"],
+    settings: ["id", "digestEmail", "digestHour", "alertEmail", "createdAt"],
+    failureCodes: ["id", "name", "active", "sort", "createdAt"],
+    photos: ["id", "workOrderId", "assetId", "kind", "name", "driveFileId", "url", "dataUrl", "techId", "createdAt"],
+    downtimeEvents: ["id", "assetId", "assetTag", "workOrderId", "startedAt", "endedAt", "minutes", "open", "note", "createdAt"],
+    checkTemplates: ["id", "name", "assetId", "notes", "active", "createdAt"],
+    checkItems: ["id", "templateId", "sort", "text", "createdAt"],
+    inspections: ["id", "templateId", "assetId", "techId", "date", "status", "notes", "createdAt"],
+    inspectionLines: ["id", "inspectionId", "itemId", "text", "result", "note", "workOrderId", "createdAt"],
+    sensorLimits: ["id", "assetId", "name", "unit", "low", "high", "active", "createdAt"],
+    sensorLogs: ["id", "assetId", "assetTag", "name", "unit", "value", "type", "date", "source", "flag", "note", "createdAt"],
+    lotoPoints: ["id", "assetId", "name", "energy", "howToIsolate", "photoData", "sort", "createdAt"],
+    warranties: ["id", "assetId", "vendor", "what", "expires", "notes", "createdAt"],
+    outsideJobs: ["id", "assetId", "vendor", "estimate", "po", "cost", "status", "openedDate", "notes", "createdAt"],
+    schedules: ["id", "date", "techId", "workOrderId", "pmTaskId", "note", "createdAt"],
+    reservations: ["id", "workOrderId", "pmTaskId", "partId", "qty", "status", "createdAt"]
   };
 
   const num = v => { const n = typeof v === "number" ? v : parseFloat(String(v == null ? "" : v).replace(/[$,]/g, "")); return isFinite(n) ? n : 0; };
@@ -90,7 +106,11 @@
   const uid = () => (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40);
   const clone = v => structuredClone(v);
   const inRange = (date, from, to) => { const d = dayOf(date); return !!d && d >= from && d <= to; };
-  const emptyState = () => ({ techs: [], assets: [], levels: [], pmTasks: [], workOrders: [], parts: [], fits: [], uses: [], timeLogs: [], readings: [], moves: [] });
+  const emptyState = () => ({
+    techs: [], assets: [], levels: [], pmTasks: [], workOrders: [], parts: [], fits: [], uses: [], timeLogs: [], readings: [], moves: [],
+    settings: [], failureCodes: [], photos: [], downtimeEvents: [], checkTemplates: [], checkItems: [], inspections: [], inspectionLines: [],
+    sensorLimits: [], sensorLogs: [], lotoPoints: [], warranties: [], outsideJobs: [], schedules: [], reservations: []
+  });
 
   /* Stock changes travel as a delta or an absolute recount.
      Phones send the change, not the total, so two techs can pull parts
@@ -605,11 +625,12 @@
       const title = String(f.title || "").trim();
       if (!title) return fail("Give the work order a short title.");
       const status = STATUSES.includes(f.status) ? f.status : ((existing && existing.status) || "open");
+      const type = WO_TYPES.includes(f.type) ? f.type : ((existing && existing.type) || "Repair");
       const assetId = Object.prototype.hasOwnProperty.call(f, "assetId") ? f.assetId : ((existing && existing.assetId) || "");
       const asset = assetId ? assetById(state, assetId) : null;
       if (assetId && !asset) return fail("That equipment was not found.");
-      if (!asset && status !== "draft") return fail("Pick the equipment. Drafts can wait until you know which machine.");
-      const type = WO_TYPES.includes(f.type) ? f.type : ((existing && existing.type) || "Repair");
+      const general = type === GENERAL_TYPE;
+      if (!asset && status !== "draft" && !general) return fail("Pick the equipment. Drafts can wait until you know which machine. A General / plant task can stay without one.");
       const priority = PRIORITIES.includes(f.priority) ? f.priority : ((existing && existing.priority) || "Normal");
       const source = SOURCES.includes(f.source) ? f.source : ((existing && existing.source) || "typed");
       const now = stamp(f);
@@ -618,8 +639,9 @@
       if (f.assignedTo && !tech) return fail("That tech is not on the team.");
       const wo = existing || { id: f.id || uid(), woNumber: nextWoNumber(state), createdAt: now };
       wo.assetId = asset ? asset.id : "";
-      wo.assetTag = asset ? asset.tag : (existing && existing.assetTag) || "";
-      wo.assetName = asset ? asset.name : (existing && existing.assetName) || "";
+      wo.assetTag = asset ? asset.tag : "";
+      wo.assetName = asset ? asset.name : "";
+      wo.location = f.location != null ? String(f.location).trim() : (wo.location || "");
       wo.title = title;
       wo.description = String(f.description == null ? wo.description || "" : f.description);
       wo.type = type;
@@ -642,6 +664,8 @@
       wo.source = source;
       wo.voiceTranscript = String(f.voiceTranscript == null ? wo.voiceTranscript || "" : f.voiceTranscript);
       wo.notes = String(f.notes == null ? wo.notes || "" : f.notes);
+      wo.failureCode = f.failureCode != null ? String(f.failureCode) : (wo.failureCode || "");
+      wo.rootCause = f.rootCause != null ? String(f.rootCause) : (wo.rootCause || "");
       wo.updatedAt = now;
       if (!existing) {
         wo.laborHours = 0; wo.laborCost = 0; wo.partsCost = 0; wo.totalCost = round2(wo.otherCost);
@@ -658,11 +682,15 @@
       if (!wo) return fail("That work order was not found.");
       const status = f.status;
       if (!STATUSES.includes(status)) return fail("Unknown status.");
-      if (status !== "draft" && !wo.assetId) return fail("Pick the equipment before moving this out of draft.");
+      if (status !== "draft" && !wo.assetId && wo.type !== GENERAL_TYPE) return fail("Pick the equipment before moving this out of draft. A General / plant task can stay without one.");
       const now = stamp(f);
       const day = f.date || dayOf(now);
       if (status === "cancelled" && wo.status !== "cancelled") {
         for (const u of state.uses.filter(u => u.workOrderId === wo.id).slice()) giveBackUse(state, ops, u.id, now);
+        for (const res of (state.reservations || []).filter(r => r.workOrderId === wo.id && r.status === "issued")) {
+          res.status = "cancelled";
+          put(ops, "reservations", res);
+        }
       }
       if (f.workPerformed != null) wo.workPerformed = String(f.workPerformed);
       if (f.downtimeHours != null) {
@@ -670,6 +698,8 @@
         wo.downtimeHours = round2(f.downtimeHours);
       }
       if (f.otherCost != null) wo.otherCost = round2(f.otherCost);
+      if (f.failureCode != null) wo.failureCode = String(f.failureCode);
+      if (f.rootCause != null) wo.rootCause = String(f.rootCause);
       wo.status = status;
       wo.updatedAt = now;
       if (status === "complete") {
@@ -767,20 +797,21 @@
       if (hours > 24) return fail("That's more than a day. Log each day on its own line.");
       const wo = f.workOrderId ? woById(state, f.workOrderId) : null;
       if (f.workOrderId && !wo) return fail("That work order was not found.");
-      const asset = wo ? assetById(state, wo.assetId) : assetById(state, f.assetId);
-      if (!asset) return fail("Pick the equipment this time goes against.");
+      const asset = wo && wo.assetId ? assetById(state, wo.assetId) : (!wo ? assetById(state, f.assetId) : null);
+      const plantTask = wo && !wo.assetId && wo.type === GENERAL_TYPE;
+      if (!asset && !plantTask) return fail("Pick the equipment this time goes against.");
       const existing = f.id && state.timeLogs.find(t => t.id === f.id);
       const now = stamp(f);
       const rate = f.rate != null && f.rate !== "" ? round2(f.rate) : round2(tech.hourlyRate);
       const row = {
-        id: (existing && existing.id) || uid(), workOrderId: wo ? wo.id : "", assetId: asset.id, techId: tech.id, techName: tech.name,
+        id: (existing && existing.id) || uid(), workOrderId: wo ? wo.id : "", assetId: asset ? asset.id : "", techId: tech.id, techName: tech.name,
         date: f.date || dayOf(now), hours, rate, notes: String(f.notes || "").trim(), createdAt: (existing && existing.createdAt) || now
       };
       if (!row.date) return fail("Enter the date.");
       if (existing) Object.assign(existing, row); else state.timeLogs.push(row);
       put(ops, "timeLogs", existing || row);
       if (wo) { wo.updatedAt = now; put(ops, "workOrders", wo); }
-      return { message: "Logged " + hours + " h for " + tech.name + " on " + asset.tag + "." };
+      return { message: "Logged " + hours + " h for " + tech.name + " on " + (asset ? asset.tag : "a plant task") + "." };
     });
   }
   function deleteTime(input, id) {
@@ -856,7 +887,16 @@
       else message += " No parts on this PM.";
       const lows = [];
       for (const line of lines) { const p = partById(state, line.partId); const n = p && stockNote(p); if (n) lows.push(n); }
+      if (!state.reservations) state.reservations = [];
+      for (const line of lines) {
+        const part = partById(state, line.partId);
+        if (!part) continue;
+        const resv = { id: uid(), workOrderId: wo.id, pmTaskId: task.id, partId: part.id, qty: round2(line.qty), status: "issued", createdAt: now };
+        state.reservations.push(resv);
+        put(ops, "reservations", resv);
+      }
       if (lows.length) message += " " + lows.join(" ");
+      if (pulled.length) message += " Kit reserved and pulled.";
       message += " Due " + fmtShort(wo.dueDate) + ".";
       return { message, woId: wo.id, woNumber: wo.woNumber };
     });
@@ -973,8 +1013,8 @@
       const c = woCosts(state, w.id);
       const task = w.pmTaskId && taskById(state, w.pmTaskId);
       return {
-        woNumber: w.woNumber, openedDate: w.openedDate, completedDate: w.completedDate, assetTag: w.assetTag, assetName: w.assetName,
-        area: (assetById(state, w.assetId) || {}).area || "", type: w.type, status: STATUS_LABEL[w.status] || w.status, priority: w.priority,
+        woNumber: w.woNumber, openedDate: w.openedDate, completedDate: w.completedDate, assetTag: w.assetTag || (w.type === GENERAL_TYPE ? "No machine" : ""), assetName: w.assetName || (w.location || ""),
+        area: (assetById(state, w.assetId) || {}).area || w.location || (w.type === GENERAL_TYPE ? "No machine · General" : ""), type: w.type, status: STATUS_LABEL[w.status] || w.status, priority: w.priority,
         assigned: whoName(state, w), title: w.title, dueDate: w.dueDate, meterAt: hasNum(w.meterAt) ? num(w.meterAt) : "",
         downtimeHours: num(w.downtimeHours), laborHours: c.laborHours, laborCost: c.labor, partsCost: c.parts, otherCost: c.other, totalCost: c.total,
         partsUsed: partsUsedText(state, w.id), techs: techsOnWo(state, w.id), source: w.source, pmTask: task ? task.name : "",
@@ -1035,8 +1075,76 @@
     ];
   }
 
+  /* A cell that starts with = + - @ or a control character is a formula in Excel and Sheets. */
+  function sheetSafe(v) {
+    if (typeof v === "number" && isFinite(v)) return String(v);
+    const s = v == null ? "" : String(v);
+    return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+  }
+  const PHOTO_MAX = 45000;
+  function acceptPhotoData(dataUrl) {
+    const raw = String(dataUrl || "");
+    if (!raw) return { ok: false, message: "That photo was empty. It was not saved." };
+    if (raw.length > PHOTO_MAX) return { ok: false, message: "That photo is still too big to store. It was not saved." };
+    return { ok: true, dataUrl: raw };
+  }
+  /* Same rules as Code.gs sensorKeepSample. A steady reading is not a new row. */
+  function sensorShouldStore(last, sample, everyMin) {
+    const mins = Number(everyMin) > 0 ? Number(everyMin) : 15;
+    sample = sample || {};
+    const flag = sample.flag || "ok";
+    if (!last) return { store: true, reason: "first" };
+    const prevFlag = last.flag || "ok";
+    if (flag !== "ok") return { store: true, reason: "out" };
+    if (prevFlag !== "ok") return { store: true, reason: "back" };
+    const prev = Number(last.value);
+    const next = Number(sample.value);
+    const delta = Number(sample.delta);
+    const span = isFinite(delta) && delta > 0 ? delta : Math.max(0.5, Math.abs(prev) * 0.01);
+    if (isFinite(prev) && isFinite(next) && Math.abs(next - prev) >= span) return { store: true, reason: "change" };
+    const age = Number(sample.now) - Number(last.at || last.createdAt || 0);
+    if (age >= mins * 60000) return { store: true, reason: "interval" };
+    return { store: false, reason: "steady" };
+  }
+  /* One mail when a reading leaves the limits, a reminder every few hours, and one when it returns. */
+  function sensorAlertPlan(prev, sample, now, remindHours) {
+    const hours = Number(remindHours) > 0 ? Number(remindHours) : 4;
+    const flag = (sample && sample.flag) || "ok";
+    const was = (prev && prev.flag) || "ok";
+    const lastAlert = prev && Number(prev.lastAlert) ? Number(prev.lastAlert) : 0;
+    if (flag !== "ok" && was === "ok") return { send: "out", state: { flag, lastAlert: now } };
+    if (flag !== "ok") {
+      if (Number(now) - lastAlert >= hours * 3600000) return { send: "remind", state: { flag, lastAlert: now } };
+      return { send: "", state: { flag, lastAlert } };
+    }
+    if (was !== "ok") return { send: "back", state: { flag: "ok", lastAlert: 0 } };
+    return { send: "", state: { flag: "ok", lastAlert: 0 } };
+  }
+  function sensorAlertDue(lastMs, nowMs, windowMin) {
+    const windowMs = (Number(windowMin) > 0 ? Number(windowMin) : 60) * 60000;
+    const last = Number(lastMs);
+    if (!last) return true;
+    return Number(nowMs) - last >= windowMs;
+  }
+  function meterReadingOk(current, next, metered) {
+    const n = Number(next);
+    if (!isFinite(n) || n <= 0) return { ok: false, update: false, reason: "implausible" };
+    if (!metered) return { ok: true, update: false, reason: "" };
+    if (current !== "" && current != null && isFinite(Number(current)) && n < Number(current)) return { ok: false, update: false, reason: "lower" };
+    return { ok: true, update: true, reason: "" };
+  }
+  function recentSensorLogs(rows, day, days, max) {
+    const span = days > 0 ? days : 30;
+    const cap = max > 0 ? max : 500;
+    const from = addDays(day || today(), -(span - 1));
+    const kept = (rows || []).filter(r => {
+      const d = dayOf(r.date || r.createdAt);
+      return d && d >= from;
+    }).sort((a, b) => String(b.createdAt || b.date).localeCompare(String(a.createdAt || a.date)));
+    return kept.slice(0, cap);
+  }
   function toCsv(columns, rows) {
-    const q = v => { v = v == null ? "" : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const q = v => { v = sheetSafe(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const lines = [columns.map(c => q(c.label)).join(",")];
     for (const row of rows) lines.push(columns.map(c => q(c.kind === "money" || c.kind === "num" ? (row[c.key] === "" ? "" : round2(row[c.key])) : row[c.key])).join(","));
     return lines.join("\r\n");
@@ -1070,6 +1178,159 @@
 
   function sortWork(list, day) {
     return list.slice().sort((a, b) => (isOverdueWo(b, day) - isOverdueWo(a, day)) || (priorityRank(a.priority) - priorityRank(b.priority)) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String(a.openedDate || "").localeCompare(String(b.openedDate || "")));
+  }
+  const isGeneral = w => !!(w && w.type === GENERAL_TYPE);
+  /* Search boxes must not be rebuilt while the keyboard mic or Wispr is mid-word. */
+  function dictationAllowsRender(flags) {
+    flags = flags || {};
+    return !flags.focused && !flags.composing;
+  }
+  function wordsOf(s) {
+    return String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  }
+  function fuzzyAsset(assets, text) {
+    const spoken = String(text || "").toLowerCase();
+    let best = null, bestScore = 0;
+    for (const a of assets || []) {
+      let score = 0;
+      const tag = String(a.tag || "").toLowerCase();
+      if (tag && spoken.includes(tag)) score += 6;
+      for (const w of wordsOf(a.name)) if (spoken.includes(w)) score += 2;
+      for (const w of wordsOf(a.area)) if (spoken.includes(w)) score += 1;
+      if (score > bestScore) { best = a; bestScore = score; }
+    }
+    return bestScore >= 2 ? best : null;
+  }
+  function fuzzyTech(techs, spoken) {
+    const q = String(spoken || "").toLowerCase().trim();
+    if (!q) return null;
+    let best = null, bestScore = 0;
+    for (const t of techs || []) {
+      const name = String(t.name || "").toLowerCase();
+      if (!name) continue;
+      let score = 0;
+      if (name === q) score = 10;
+      else if (name.startsWith(q + " ") || name.split(" ")[0] === q) score = 6;
+      else if (name.includes(q)) score = 4;
+      else {
+        const hits = wordsOf(q).filter(w => name.includes(w)).length;
+        if (hits) score = hits;
+      }
+      if (score > bestScore) { best = t; bestScore = score; }
+    }
+    return bestScore >= 1 ? best : null;
+  }
+  function lastMatch(text, re) {
+    let m, last = null;
+    const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    while ((m = r.exec(text))) last = m;
+    return last;
+  }
+  function tidyPhrase(s) {
+    return String(s || "").replace(/[.,]+$/g, "").replace(/\s+/g, " ").trim();
+  }
+  function parseVoiceWorkOrder(transcript, state, opts) {
+    opts = opts || {};
+    state = state || emptyState();
+    const text = String(transcript || "").replace(/\s+/g, " ").trim();
+    const lower = text.toLowerCase();
+    let type = "Repair";
+    if (/\bgeneral\s*\/\s*plant\b|\bgeneral\s+(?:plant\s+)?task\b|\bplant task\b|\bgeneral plant\b/.test(lower)) type = GENERAL_TYPE;
+    else if (/\binspection\b/.test(lower)) type = "Inspection";
+    else if (/\bpreventive\b|\bpm\b/.test(lower)) type = "PM";
+    else if (/\bproject\b/.test(lower)) type = "Project";
+    let priority = "Normal";
+    const pri = lastMatch(lower, /\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/i);
+    if (pri) priority = pri[1].charAt(0).toUpperCase() + pri[1].slice(1);
+    const todayIso = opts.today || today();
+    let dueDate = "";
+    const dueWord = lastMatch(lower, /\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+    if (dueWord) {
+      const word = dueWord[1].toLowerCase();
+      if (word === "today") dueDate = todayIso;
+      else if (word === "tomorrow") dueDate = addDays(todayIso, 1);
+      else {
+        const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+        const ms = parseDay(todayIso);
+        const cur = ms == null ? 0 : new Date(ms).getUTCDay();
+        const target = names.indexOf(word);
+        dueDate = addDays(todayIso, (target - cur + 7) % 7);
+      }
+    }
+    let assignedTo = "", assignedName = "";
+    const who = lastMatch(lower, /\bassign(?:ed)?\s+to\s+([a-z][a-z .'-]{1,40})/i);
+    if (who) {
+      const tech = fuzzyTech(state.techs, tidyPhrase(who[1]).split(/\s+/).filter(w => !/^(priority|location|area|due|today|tomorrow|high|low|urgent|normal)$/.test(w)).slice(0, 3).join(" "));
+      if (tech) { assignedTo = tech.id; assignedName = tech.name; }
+    }
+    let location = "";
+    const loc = lastMatch(lower, /\b(?:location|area)\s+(?:is\s+|to\s+)?([a-z0-9][a-z0-9 .'-]{0,60})/i);
+    if (loc) location = tidyPhrase(loc[1]).split(/\s+/).filter(w => !/^(priority|assign|assigned|due|today|tomorrow|high|low|urgent|normal)$/.test(w)).slice(0, 6).join(" ");
+    let asset = null;
+    if (type !== GENERAL_TYPE) {
+      asset = fuzzyAsset(state.assets, text);
+      if (!asset && opts.assetId) asset = assetById(state, opts.assetId);
+    }
+    let description = text
+      .replace(/^\s*(work order|general task|plant task|general\s*\/\s*plant task)\s*,?\s*/i, "")
+      .replace(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/ig, "")
+      .replace(/\bassign(?:ed)?\s+to\s+[a-z][a-z .'-]{1,40}/ig, "")
+      .replace(/\b(?:location|area)\s+(?:is\s+|to\s+)?[a-z0-9][a-z0-9 .'-]{0,60}/ig, "")
+      .replace(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, "")
+      .replace(/\s+,/g, ",").replace(/^[,\s]+|[,\s]+$/g, "").replace(/\s{2,}/g, " ").trim();
+    if (!description) description = text;
+    const title = description.split(/[.]/)[0].slice(0, 80);
+    return {
+      type, priority, dueDate, assignedTo, assignedName, location,
+      assetId: asset ? asset.id : "", assetTag: asset ? asset.tag : "", assetName: asset ? asset.name : "",
+      title, description, transcript: text,
+      needsAsset: type !== GENERAL_TYPE && !asset
+    };
+  }
+  function voiceSaveFields(parsed, chosenAssetId) {
+    parsed = parsed || {};
+    let type = parsed.type || "Repair";
+    let assetId = parsed.assetId || "";
+    if (!assetId && chosenAssetId) assetId = String(chosenAssetId);
+    if (!assetId && type !== GENERAL_TYPE) type = GENERAL_TYPE;
+    return {
+      type, assetId,
+      location: parsed.location || "",
+      title: parsed.title || parsed.description || "",
+      description: parsed.description || parsed.title || "",
+      priority: parsed.priority || "Normal",
+      assignedTo: parsed.assignedTo || "",
+      dueDate: parsed.dueDate || "",
+      voiceTranscript: parsed.transcript || ""
+    };
+  }
+  function applyVoiceCommand(parsed, utterance, state, opts) {
+    const command = voiceCommand(utterance);
+    if (command !== "change") return { command, parsed: parsed || null };
+    const extra = String(utterance || "").replace(/^\s*change\s+(?:it\s+)?(?:to\s+)?/i, "");
+    const next = parseVoiceWorkOrder((((parsed && parsed.transcript) || "") + " " + extra).trim(), state, opts || {});
+    return { command: "change", parsed: next };
+  }
+  function voiceCommand(utterance) {
+    const u = String(utterance || "").toLowerCase().trim().replace(/[.!?]+$/g, "");
+    if (/^(save|save it|yes|yeah|do it|confirm|go ahead)$/.test(u)) return "save";
+    if (/^(cancel|cancel it|never mind|discard|stop|no)$/.test(u)) return "cancel";
+    if (/^change\b/.test(u)) return "change";
+    return "";
+  }
+  function voiceSummary(parsed) {
+    parsed = parsed || {};
+    const bits = [parsed.type || "Repair"];
+    if (parsed.assetTag) bits.push("on " + parsed.assetTag + (parsed.assetName ? " " + parsed.assetName : ""));
+    else if (parsed.type === GENERAL_TYPE) bits.push("no machine, general");
+    else bits.push("no machine yet");
+    if (parsed.location) bits.push("location " + parsed.location);
+    if (parsed.description) bits.push(parsed.description);
+    if (parsed.priority && parsed.priority !== "Normal") bits.push("priority " + parsed.priority);
+    if (parsed.assignedName) bits.push("assigned to " + parsed.assignedName);
+    if (parsed.dueDate) bits.push("due " + parsed.dueDate);
+    bits.push("Say save, cancel, or change.");
+    return bits.join(". ");
   }
 
   function chunkOps(ops, size) {
@@ -1105,6 +1366,7 @@
     if (info.mode === "sample") return [];
     const notes = [];
     const pending = Math.max(0, Math.round(num(info.pending)));
+    if (info.scriptStale) notes.push({ kind: "warn", code: "script", lead: "Script needs an update.", text: "This phone is newer than the Google script. Changes stay on this phone and will sync after you redeploy Code.gs." });
     if (info.rejected) notes.push({ kind: "bad", code: "rejected", text: String(info.rejected) });
     if (info.unreachable) {
       let text = "Couldn't reach the sheet. Showing the last copy saved on this phone.";
@@ -1130,13 +1392,15 @@
   }
 
   return {
-    STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, ASSET_STATUSES, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
+    STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, GENERAL_TYPE, ASSET_STATUSES, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
     MAX_BATCH, chunkOps, planPartAbsolutes, syncNotices,
     num, hasNum, yes, round2, money, pad, today, addDays, daysBetween, startOfWeek, dayOf, fmtDate, fmtShort, uid, clone, inRange, emptyState,
     nextOnHand, techById, assetById, partById, levelById, taskById, woById, isMetered, isActive, meterWord, whoName, priorityRank, isOverdueWo,
     parseParts, stockNote, intervalLabel, runRatePerDay, pmInfo, dueDateFor, woCosts, nextWoNumber,
     saveTech, deleteTech, saveAsset, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
-    generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, rangeBounds, compatibleParts, sortWork
+    generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
+    PHOTO_MAX, acceptPhotoData, sensorAlertDue, sensorShouldStore, sensorAlertPlan, meterReadingOk, recentSensorLogs,
+    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, voiceSaveFields, voiceSummary
   };
 });

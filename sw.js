@@ -1,7 +1,7 @@
 /* App shell cache. Network first, so a GitHub Pages update shows up.
    The Google Sheet is never cached here. */
-const CACHE = "plant-maint-v2";
-const SHELL = ["./","index.html","css/app.css","js/logic.js","js/sample.js","js/store.js","js/app.js","manifest.json","icon-192.png","icon-512.png","icon-maskable-512.png","apple-touch-icon.png"];
+const CACHE = "plant-maint-v6";
+const SHELL = ["./","index.html","css/app.css","js/logic.js","js/qr.js","js/features.js","js/sample.js","js/store.js","js/floor.js","js/app.js","manifest.json","icon-192.png","icon-512.png","icon-maskable-512.png","apple-touch-icon.png"];
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
