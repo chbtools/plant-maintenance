@@ -687,6 +687,10 @@
       const day = f.date || dayOf(now);
       if (status === "cancelled" && wo.status !== "cancelled") {
         for (const u of state.uses.filter(u => u.workOrderId === wo.id).slice()) giveBackUse(state, ops, u.id, now);
+        for (const res of (state.reservations || []).filter(r => r.workOrderId === wo.id && r.status === "issued")) {
+          res.status = "cancelled";
+          put(ops, "reservations", res);
+        }
       }
       if (f.workPerformed != null) wo.workPerformed = String(f.workPerformed);
       if (f.downtimeHours != null) {
@@ -892,7 +896,8 @@
         put(ops, "reservations", resv);
       }
       if (lows.length) message += " " + lows.join(" ");
-      message += " Kit reserved and pulled. Due " + fmtShort(wo.dueDate) + ".";
+      if (pulled.length) message += " Kit reserved and pulled.";
+      message += " Due " + fmtShort(wo.dueDate) + ".";
       return { message, woId: wo.id, woNumber: wo.woNumber };
     });
   }
@@ -1070,8 +1075,43 @@
     ];
   }
 
+  /* A cell that starts with = + - @ or a control character is a formula in Excel and Sheets. */
+  function sheetSafe(v) {
+    const s = v == null ? "" : String(v);
+    return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+  }
+  const PHOTO_MAX = 45000;
+  function acceptPhotoData(dataUrl) {
+    const raw = String(dataUrl || "");
+    if (!raw) return { ok: false, message: "That photo was empty. It was not saved." };
+    if (raw.length > PHOTO_MAX) return { ok: false, message: "That photo is still too big to store. It was not saved." };
+    return { ok: true, dataUrl: raw };
+  }
+  function sensorAlertDue(lastMs, nowMs, windowMin) {
+    const windowMs = (Number(windowMin) > 0 ? Number(windowMin) : 60) * 60000;
+    const last = Number(lastMs);
+    if (!last) return true;
+    return Number(nowMs) - last >= windowMs;
+  }
+  function meterReadingOk(current, next, metered) {
+    const n = Number(next);
+    if (!isFinite(n) || n <= 0) return { ok: false, update: false, reason: "implausible" };
+    if (!metered) return { ok: true, update: false, reason: "" };
+    if (current !== "" && current != null && isFinite(Number(current)) && n < Number(current)) return { ok: false, update: false, reason: "lower" };
+    return { ok: true, update: true, reason: "" };
+  }
+  function recentSensorLogs(rows, day, days, max) {
+    const span = days > 0 ? days : 30;
+    const cap = max > 0 ? max : 500;
+    const from = addDays(day || today(), -(span - 1));
+    const kept = (rows || []).filter(r => {
+      const d = dayOf(r.date || r.createdAt);
+      return d && d >= from;
+    }).sort((a, b) => String(b.createdAt || b.date).localeCompare(String(a.createdAt || a.date)));
+    return kept.slice(0, cap);
+  }
   function toCsv(columns, rows) {
-    const q = v => { v = v == null ? "" : String(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const q = v => { v = sheetSafe(v); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const lines = [columns.map(c => q(c.label)).join(",")];
     for (const row of rows) lines.push(columns.map(c => q(c.kind === "money" || c.kind === "num" ? (row[c.key] === "" ? "" : round2(row[c.key])) : row[c.key])).join(","));
     return lines.join("\r\n");
@@ -1274,6 +1314,7 @@
     if (info.mode === "sample") return [];
     const notes = [];
     const pending = Math.max(0, Math.round(num(info.pending)));
+    if (info.scriptStale) notes.push({ kind: "warn", code: "script", lead: "Script needs an update.", text: "This phone is newer than the Google script. Changes stay on this phone and will sync after you redeploy Code.gs." });
     if (info.rejected) notes.push({ kind: "bad", code: "rejected", text: String(info.rejected) });
     if (info.unreachable) {
       let text = "Couldn't reach the sheet. Showing the last copy saved on this phone.";
@@ -1306,7 +1347,8 @@
     parseParts, stockNote, intervalLabel, runRatePerDay, pmInfo, dueDateFor, woCosts, nextWoNumber,
     saveTech, deleteTech, saveAsset, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
-    generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, rangeBounds, compatibleParts, sortWork,
+    generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
+    PHOTO_MAX, acceptPhotoData, sensorAlertDue, meterReadingOk, recentSensorLogs,
     isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, voiceSummary
   };
 });

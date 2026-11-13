@@ -151,9 +151,15 @@
     let asset = f.assetId ? PM.assetById(state, f.assetId) : null;
     if (!asset && f.tag) asset = (state.assets || []).find(a => String(a.tag).toLowerCase() === String(f.tag).trim().toLowerCase());
     if (!asset) return fail("No machine with that tag.");
-    if (!PM.hasNum(f.value)) return fail("The reading needs a number.");
-    const value = PM.num(f.value);
     const type = String(f.type || "other").toLowerCase();
+    const meterLike = type === "hours" || type === "meter" || type === "cycles";
+    const check = meterLike ? PM.meterReadingOk(asset.meter, f.value, PM.isMetered(asset)) : { ok: PM.hasNum(f.value), update: false, reason: PM.hasNum(f.value) ? "" : "implausible" };
+    if (!check.ok) {
+      return fail(check.reason === "lower"
+        ? "That meter reading is lower than the current meter. It was not saved."
+        : "That reading is not a usable number. It was not saved.");
+    }
+    const value = PM.num(f.value);
     const name = String(f.name || type).trim();
     const limit = list(state, "sensorLimits").find(l => l.assetId === asset.id && String(l.name).toLowerCase() === name.toLowerCase() && l.active !== "no");
     const flag = flagValue(limit, value);
@@ -166,8 +172,7 @@
     list(state, "sensorLogs").push(log);
     const ops = [op("sensorLogs", log)];
     let pmDue = false;
-    if (type === "hours" || type === "meter" || type === "cycles") {
-      if (PM.isMetered(asset)) {
+    if (meterLike && check.update) {
         asset.meter = value;
         asset.updatedAt = now;
         ops.push(op("assets", asset));
@@ -175,7 +180,6 @@
         list(state, "readings").push(reading);
         ops.push(op("readings", reading));
         pmDue = (state.pmTasks || []).some(t => t.assetId === asset.id && PM.pmInfo(state, t, date).status === "overdue");
-      }
     }
     const message = asset.tag + " " + name + " " + value + (log.unit ? " " + log.unit : "") + (flag === "ok" ? "" : " is out of range (" + flag + ").");
     return { ok: true, state, ops, message, flag, pmDue, logId: log.id, assetId: asset.id };
@@ -399,17 +403,24 @@
     return { ok: true, state, ops: [op("photos", row)], message: "Photo saved.", id: row.id };
   }
 
-  function downtimeMinutes(state, assetId, from, to) {
+  function downAction(asset, events) {
+    const open = (events || []).some(e => asset && e.assetId === asset.id && e.open === "yes");
+    return open ? "up" : "down";
+  }
+  function downtimeMinutes(state, assetId, from, to, nowIso) {
+    const fromMs = Date.parse(from + "T00:00:00.000Z");
+    const toMs = Date.parse(to + "T23:59:59.000Z");
+    const nowMs = Date.parse(nowIso || (to + "T23:59:59.000Z"));
     let mins = 0;
     list(state, "downtimeEvents").forEach(e => {
       if (assetId && e.assetId !== assetId) return;
-      const startDay = PM.dayOf(e.startedAt);
-      if (e.open === "yes") {
-        if (startDay && startDay <= to) mins += PM.num(e.minutes) || 0;
-        return;
-      }
-      const endDay = PM.dayOf(e.endedAt || e.startedAt);
-      if (endDay && endDay >= from && startDay <= to) mins += PM.num(e.minutes);
+      const startMs = Date.parse(e.startedAt);
+      if (!isFinite(startMs)) return;
+      let stopMs = (e.open === "yes" || !e.endedAt) ? nowMs : Date.parse(e.endedAt);
+      if (!isFinite(stopMs)) stopMs = startMs;
+      const a = Math.max(startMs, isFinite(fromMs) ? fromMs : startMs);
+      const b = Math.min(stopMs, isFinite(toMs) ? toMs : stopMs, isFinite(nowMs) ? nowMs : stopMs);
+      if (b > a) mins += Math.round((b - a) / 60000);
     });
     return mins;
   }
@@ -419,9 +430,9 @@
     const rows = (state.assets || []).map(a => {
       const wos = (state.workOrders || []).filter(w => w.assetId === a.id && w.status !== "cancelled" && w.status !== "draft" && PM.inRange(w.openedDate, from, day));
       const spend = PM.spendBetween(state, from, day, a.id);
-      const eventMins = downtimeMinutes(state, a.id, from, day);
+      const eventMins = downtimeMinutes(state, a.id, from, day, day + "T23:59:59.000Z");
       const woHours = wos.reduce((n, w) => n + PM.num(w.downtimeHours), 0);
-      const downtime = eventMins ? Math.round(eventMins / 60 * 10) / 10 : woHours;
+      const downtime = PM.round2(Math.round(eventMins / 6) / 10 + woHours);
       return { id: a.id, tag: a.tag, name: a.name, area: a.area || "", woCount: wos.length, downtime, cost: spend.total };
     }).filter(a => a.woCount || a.downtime || a.cost);
     const groups = {};
@@ -470,7 +481,7 @@
     const elapsedDays = Math.max(1, PM.daysBetween(from, day) + 1);
     const possible = assets.length * elapsedDays * 24 * 60;
     let down = 0;
-    assets.forEach(a => { down += downtimeMinutes(state, a.id, from, day); });
+    assets.forEach(a => { down += downtimeMinutes(state, a.id, from, day, day >= PM.today() ? new Date().toISOString() : day + "T23:59:59.000Z"); });
     const uptime = possible ? Math.max(0, Math.min(100, Math.round((1 - down / possible) * 1000) / 10)) : 100;
     const spend = PM.spendBetween(state, from, day);
     return { from, day, compliance, uptime, spend, areas, offenders, pmCount: active.length, pmOk: ok };
@@ -548,6 +559,6 @@
     machineDown, machineUp, openDowntime, saveLimit, flagValue, ingestSensor, trend,
     saveTemplate, submitInspection, saveLoto, deleteLoto, saveWarranty, warrantyAlerts, saveOutsideJob,
     saveSchedule, deleteSchedule, saveSettings, plantSettings, addPhoto,
-    downtimeMinutes, repeatOffenders, monthlyOnePager, reorderRows, reorderCsv, assetLink, seedFeatures
+    downtimeMinutes, downAction, repeatOffenders, monthlyOnePager, reorderRows, reorderCsv, assetLink, seedFeatures
   });
 })();

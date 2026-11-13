@@ -209,7 +209,7 @@
     const hash = opt.hash || "";
     if (hash && location.hash !== hash) location.hash = hash;
     render();
-    toast((result.message || "Saved.") + (saved.queued ? " Kept on this phone until the sheet answers." : ""));
+    toast((result.message || "Saved.") + (saved.scriptStale ? " The sheet script needs an update before this can sync." : saved.queued ? " Kept on this phone until the sheet answers." : ""));
     if (needCode) askCode(true);
     return true;
   }
@@ -246,7 +246,8 @@
       pending: Store.pending,
       unreachable: Store.unreachable,
       rejected: Store.rejected,
-      authProblem: Store.authProblem
+      authProblem: Store.authProblem,
+      scriptStale: Store.scriptStale
     });
     b.innerHTML = notes.map(n => `<div class="banner ${n.kind}" data-sync="${esc(n.code)}">${n.lead ? `<b>${esc(n.lead)}</b> ` : ""}${esc(n.text)}</div>`).join("");
   }
@@ -256,9 +257,8 @@
     return {
       view, state, ui, PM, Store, route: route(), esc, sel, pill, toast, openSheet, closeSheet, commit, byId, val,
       assetChoices, techChoices, meName, sortedAssets, sortedTechs, statusPill, assetPill, download, paint: paintChrome,
-      notify: (subject, body) => {
-        toast(subject);
-        if (Store.mode === "live" && Store.notify) Store.notify(subject, body).catch(() => toast("The email did not send. Check the alert address and that the script was redeployed."));
+      notify: (kind, assetId) => {
+        if (Store.mode === "live" && Store.notify) Store.notify(kind, assetId).catch(() => toast("The email did not send. Check the alert address and that the script was redeployed."));
       },
       uploadPhoto: (dataUrl, name) => Store.uploadPhoto ? Store.uploadPhoto(dataUrl, name) : Promise.resolve({ ok: true, fallback: true, dataUrl })
     };
@@ -289,6 +289,7 @@
       view.innerHTML = `<div class="empty"><h3>This page hit a snag</h3><p>${esc(err.message)}</p></div>`;
     }
     attachMics(view);
+    if (window.Floor && Floor.loadDrivePhotos) Floor.loadDrivePhotos(view);
   }
 
   function renderHome() {
@@ -811,9 +812,9 @@
       ${asset && PM.isMetered(asset) ? `<div class="f"><label for="cMeter">Meter now (${esc(PM.meterWord(asset))})</label><input id="cMeter" type="number" min="0" step="any" value="${esc(PM.hasNum(asset.meter) ? asset.meter : "")}"><p class="hint">This reading feeds the next PM date.</p></div>` : ""}
       <div class="g2"><div class="f"><label for="cDown">Downtime hours</label><input id="cDown" type="number" min="0" step="0.1" value="${esc(w.downtimeHours || 0)}"></div>
         <div class="f"><label for="cDate">Completed</label><input id="cDate" type="date" value="${esc(PM.today())}"></div></div>
-      <div class="g2"><div class="f"><label for="cFail">Failure code</label>${sel("cFail", w.failureCode || "", [["", "Not set"]].concat(PM.failureCodeNames(state).map(n => [n, n])))}</div>
+      ${window.Floor && Floor.shown && !Floor.shown("failure") ? "" : `<div class="g2"><div class="f"><label for="cFail">Failure code</label>${sel("cFail", w.failureCode || "", [["", "Not set"]].concat(PM.failureCodeNames(state).map(n => [n, n])))}</div>
         <div class="f"><label for="cRoot">Root cause</label><input id="cRoot" type="text" value="${esc(w.rootCause || "")}" placeholder="What actually caused it" autocomplete="on"></div></div>
-      <p class="note">The code list is under Floor → Failure codes.</p>
+      <p class="note">The code list is under Floor → Failure codes.</p>`}
       <div class="err" id="formErr" role="alert"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="cSave">Mark complete</button>`,
       () => {
@@ -821,7 +822,7 @@
         byId("cSave").addEventListener("click", () => commit(PM.setWoStatus(state, {
           id: w.id, status: "complete", workPerformed: val("cDone"), downtimeHours: val("cDown"),
           completedDate: val("cDate") || PM.today(), meterAt: byId("cMeter") ? val("cMeter") : "", techId: ui.me, date: val("cDate") || PM.today(),
-          failureCode: val("cFail"), rootCause: val("cRoot")
+          failureCode: byId("cFail") ? val("cFail") : w.failureCode, rootCause: byId("cRoot") ? val("cRoot") : w.rootCause
         }), { hash: "#wo/" + w.id }));
       });
   }

@@ -509,3 +509,142 @@ test("voice work order parses several phrasings, including a general task", () =
   assert.equal(prefilled.dueDate, "2026-11-13");
   assert.match(PM.voiceSummary(general), /no machine/i);
 });
+
+test("a photo that does not fit is refused and a short one is kept whole", () => {
+  const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert.equal(PM.acceptPhotoData("").ok, false);
+  assert.equal(PM.acceptPhotoData("data:image/jpeg;base64,abc").ok, true);
+  assert.equal(PM.acceptPhotoData("x".repeat(PM.PHOTO_MAX + 1)).ok, false);
+  assert.match(PM.acceptPhotoData("x".repeat(PM.PHOTO_MAX + 1)).message, /not saved/);
+  assert.doesNotMatch(gs, /ANYONE_WITH_LINK/);
+  assert.doesNotMatch(gs, /raw\.slice\(0,\s*45000\)/);
+  assert.match(gs, /PHOTO_FOLDER_ID/);
+  assert.match(gs, /photoGet/);
+  assert.match(gs, /photo too large/);
+});
+
+test("meter posts reject junk and a lower reading, and skip a machine with no meter", () => {
+  let s = PM.emptyState();
+  s = PM.saveAsset(s, { tag: "AC-9", name: "Compressor", metered: "yes", meter: 100 }).state;
+  s = PM.saveAsset(s, { tag: "PS-9", name: "Saw", metered: "no" }).state;
+  const low = PM.ingestSensor(s, { tag: "AC-9", name: "Run hours", type: "hours", value: 90 });
+  assert.equal(low.ok, false);
+  assert.match(low.message, /lower/);
+  assert.equal(PM.num(s.assets.find(a => a.tag === "AC-9").meter), 100);
+  for (const value of [0, -5, "nope"]) {
+    const bad = PM.ingestSensor(s, { tag: "AC-9", name: "Run hours", type: "hours", value });
+    assert.equal(bad.ok, false, String(value));
+  }
+  const saw = PM.ingestSensor(s, { tag: "PS-9", name: "Run hours", type: "hours", value: 10 });
+  assert.equal(saw.ok, true, saw.message);
+  assert.equal(saw.state.assets.find(a => a.tag === "PS-9").meter, "");
+  assert.equal(saw.state.readings.length, 0);
+  const up = PM.ingestSensor(s, { tag: "AC-9", name: "Run hours", type: "hours", value: 110 });
+  assert.equal(up.ok, true, up.message);
+  assert.equal(PM.num(up.state.assets.find(a => a.tag === "AC-9").meter), 110);
+  const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert.match(gs, /ingestSensorLocked/);
+  assert.match(gs, /LockService\.getScriptLock/);
+  assert.match(gs, /meter went backwards/);
+});
+
+test("out-of-range mail waits for the window", () => {
+  const now = Date.parse("2026-11-12T15:00:00.000Z");
+  assert.equal(PM.sensorAlertDue(0, now, 60), true);
+  assert.equal(PM.sensorAlertDue(now - 30 * 60000, now, 60), false);
+  assert.equal(PM.sensorAlertDue(now - 60 * 60000, now, 60), true);
+  const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert.match(gs, /SENSOR_ALERT_MINUTES/);
+  assert.match(gs, /alertAllowed\('sensor:'/);
+  assert.doesNotMatch(gs, /p\.subject/);
+  assert.doesNotMatch(gs, /p\.body/);
+});
+
+test("downtime counts an open clock and adds closed events to work-order hours", () => {
+  let s = PM.emptyState();
+  s = PM.saveAsset(s, { tag: "RT-9", name: "Gantry", metered: "no" }).state;
+  const asset = s.assets[0];
+  const down = PM.machineDown(s, { assetId: asset.id, now: "2026-11-12T14:00:00.000Z" });
+  s = down.state;
+  s.assets[0].status = "Running";
+  assert.equal(PM.downAction(s.assets[0], s.downtimeEvents), "up");
+  const openMins = PM.downtimeMinutes(s, asset.id, "2026-11-12", "2026-11-12", "2026-11-12T15:00:00.000Z");
+  assert.equal(openMins, 60);
+  const up = PM.machineUp(s, { assetId: asset.id, now: "2026-11-12T15:00:00.000Z" });
+  s = up.state;
+  const wo = PM.saveWo(s, { title: "Trip", assetId: asset.id, status: "open", downtimeHours: 2, openedDate: "2026-11-12" });
+  s = wo.state;
+  const rows = PM.repeatOffenders(s, "2026-11-12", 30);
+  const row = rows.find(r => r.tag === "RT-9");
+  assert.equal(row.downtime, 3);
+  const month = PM.monthlyOnePager(s, "2026-11-12");
+  assert.ok(month.uptime < 100);
+  assert.ok(month.uptime > 90);
+});
+
+test("csv and the sheet escape formula text", () => {
+  const csv = PM.toCsv([{ key: "title", label: "Title" }], [
+    { title: "=cmd|calc" },
+    { title: "+1+1" },
+    { title: "@sum" },
+    { title: "ok" }
+  ]);
+  assert.match(csv, /'=cmd\|calc/);
+  assert.match(csv, /'\+1\+1/);
+  assert.match(csv, /'@sum/);
+  assert.match(csv, /(?<![+'"])ok/);
+  assert.doesNotMatch(csv, /(^|\n)=cmd/);
+  const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert.match(gs, /function sheetSafe/);
+  assert.match(gs, /sheetSafe\(text/);
+});
+
+test("cancelling a PM work order cancels the kit reservation", () => {
+  const s = sample();
+  const task = s.pmTasks.find(t => t.name === "500 hour compressor service");
+  const made = PM.generatePm(s, { taskId: task.id, today: DAY, now: DAY + "T16:00:00.000Z" });
+  assert.equal(made.ok, true, made.message);
+  assert.match(made.message, /Kit reserved/);
+  const woId = made.woId;
+  assert.ok(made.state.reservations.some(r => r.workOrderId === woId && r.status === "issued"));
+  const cancelled = PM.setWoStatus(made.state, { id: woId, status: "cancelled" });
+  assert.equal(cancelled.ok, true, cancelled.message);
+  const left = cancelled.state.reservations.filter(r => r.workOrderId === woId);
+  assert.ok(left.length >= 1);
+  assert.ok(left.every(r => r.status === "cancelled"));
+  let bare = PM.emptyState();
+  bare = PM.saveAsset(bare, { tag: "ZZ-1", name: "Bench", metered: "no" }).state;
+  bare = PM.saveLevel(bare, { assetId: bare.assets[0].id, name: "Weekly", basis: "calendar", everyDays: 7 }).state;
+  bare = PM.saveTask(bare, { assetId: bare.assets[0].id, levelId: bare.levels[0].id, name: "Sweep", parts: [] }).state;
+  const none = PM.generatePm(bare, { taskId: bare.pmTasks[0].id, today: DAY });
+  assert.equal(none.ok, true, none.message);
+  assert.doesNotMatch(none.message, /Kit reserved/);
+  assert.match(none.message, /No parts/);
+});
+
+test("labels decode with a real QR reader", () => {
+  const jsQR = require("jsqr");
+  function decode(text) {
+    const m = QR.matrix(text);
+    const scale = 4;
+    const quiet = 4;
+    const n = m.length + quiet * 2;
+    const w = n * scale;
+    const data = new Uint8ClampedArray(w * w * 4);
+    for (let y = 0; y < w; y++) for (let x = 0; x < w; x++) {
+      const mx = Math.floor(x / scale) - quiet;
+      const my = Math.floor(y / scale) - quiet;
+      const dark = mx >= 0 && my >= 0 && mx < m.length && my < m.length && m[my][mx];
+      const i = (y * w + x) * 4;
+      const v = dark ? 0 : 255;
+      data[i] = data[i + 1] = data[i + 2] = v;
+      data[i + 3] = 255;
+    }
+    const hit = jsQR(data, w, w);
+    return hit && hit.data;
+  }
+  const link = "https://chbtools.github.io/plant-maintenance/#asset/asset1234";
+  assert.equal(decode(link), link);
+  assert.equal(decode("WL-1"), "WL-1");
+  assert.equal(decode("https://example.com/plant/" + "a".repeat(40)), "https://example.com/plant/" + "a".repeat(40));
+});

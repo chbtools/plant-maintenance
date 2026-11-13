@@ -112,7 +112,7 @@ Do this when the crew should all see the same jobs. It takes about 15 minutes. T
 11. Commit that change to `main`. Pages picks it up in a minute or two.
 12. Open the app. It asks for the plant code. Enter it once per phone.
 
-Each phone keeps a copy so the lists come up even on a weak signal. New saves go to the sheet. If the sheet can't be reached, the page says so, and the change stays on that phone until the sheet answers. A wrong plant code works the same way: the change waits until the right code is entered. It does not disappear. If the sheet refuses a save outright, that one is not retried forever. The page says it was not kept, and later saves can still go through. Two people can use parts at the same time: the app sends the change in quantity, not a fresh total, so the second save doesn't put the old count back. Two phones opening work orders at the same moment get different WO- numbers from the sheet, after the updated script is deployed.
+Each phone keeps a copy so the lists come up even on a weak signal. New saves go to the sheet. If the sheet can't be reached, the page says so, and the change stays on that phone until the sheet answers. A wrong plant code works the same way: the change waits until the right code is entered. It does not disappear. If the sheet refuses a save outright, that one is not retried forever. A phone that is newer than the script is different: a save the old script does not know (it answers "unknown collection") stays on the phone, and the page says the script needs an update. Nothing is dropped while you still need to redeploy. The page says it was not kept, and later saves can still go through. Two people can use parts at the same time: the app sends the change in quantity, not a fresh total, so the second save doesn't put the old count back. Two phones opening work orders at the same moment get different WO- numbers from the sheet, after the updated script is deployed.
 
 On-hand in the **parts** tab of the sheet is the live count. Change stock from the app (Receive, Use, or Correct the count). You can sort and filter the sheet, but don't rename the tabs or the header row.
 
@@ -156,7 +156,7 @@ Everything below is turned on so you can see it. **Floor → Settings** (or **Mo
 
 ### Photos
 
-On a work order, pick Before, After, Nameplate, or Part number and take a picture. The phone shrinks it first. With the sheet connected, the script saves the file in a Drive folder named **Plant Maintenance Photos** and stores the link on the photos tab. If Drive isn't authorized, it keeps a compressed copy in the sheet instead so the picture isn't lost.
+On a work order, pick Before, After, Nameplate, or Part number and take a picture. The phone shrinks it until it fits. With the sheet connected, the script saves the file in a **private** Drive folder. The folder's id is remembered on the script (Script property `PHOTO_FOLDER_ID`), so a different folder with the same name is not used. The picture is not shared with anyone who has the link. The phone asks the script for the picture, and the script checks the plant code before it sends the bytes back. If Drive isn't authorized and the picture still fits in one cell, the full copy is kept on the sheet. If it does not fit, the app says so and does not save a cut-off image.
 
 ### Failure codes
 
@@ -164,7 +164,7 @@ When you tap **Complete**, pick a code (worn, broken, operator, electrical, air 
 
 ### Morning digest and Today
 
-**Floor → Today** is the same list on the phone: overdue PMs, machines that are down, late work orders, low stock, and warranties expiring in 30 days. The email is the same idea. Set the address under **Settings**, redeploy the script, then in Apps Script choose the function **installDigestTrigger** and click **Run** once. That adds a daily 6am trigger. It does not change the web app URL. The email does not contain the plant code.
+**Floor → Today** is the same list on the phone: overdue PMs, machines that are down, late work orders, low stock, and warranties expiring in 30 days. The email is the same idea. Set the address and the hour under **Settings**, redeploy the script, then in Apps Script choose the function **installDigestTrigger** and click **Run** once. That adds a daily trigger at the hour you saved. It does not change the web app URL. The hour is read in the script's timezone. Set that to **America/New_York** or the mail will not arrive at 6am Eastern: in Apps Script, click the gear (**Project settings**) and set **Time zone** to `America/New_York`. The email does not contain the plant code. Down alerts and out-of-range notes use fixed wording written in the script. A phone cannot put its own subject or message in the email. Each kind of note is sent at most once per machine per hour. Change that window with the script property `SENSOR_ALERT_MINUTES` (minutes, default 60).
 
 ### Inspections
 
@@ -196,11 +196,11 @@ On the machine: what is covered, who the vendor is, and the end date. **Floor �
 
 ### ESP32 sensor tie-in
 
-The script accepts `action: "sensor"` with the plant code, an asset tag, a name, a type, and a value. It stores the reading, compares it to that machine's limits, and emails the alert address if it's out of range. Types `hours`, `meter`, and `cycles` also update the hour meter, which moves PM due dates. A starter sketch is in `examples/esp32-sensor.ino`. Put your own code and URL in the sketch. Don't commit the real plant code. The sketch prints only the HTTP status, not the code.
+The script accepts `action: "sensor"` with the plant code, an asset tag, a name, a type, and a value. It stores the reading and compares it to that machine's limits. An out-of-range reading emails the alert address at most once per machine and reading type in the window above. Types `hours`, `meter`, and `cycles` update the hour meter only on a machine that has a meter, and only when the new number is higher than the one already stored. Zero, blank, and negative meter posts are refused. Phones sync the last 30 days of readings (500 rows at most). Older rows stay on the sheet and are not copied to every phone. A starter sketch is in `examples/esp32-sensor.ino`. It checks Google's certificate (GTS Root R1) instead of skipping the check. Put your own code and URL in the sketch. Don't commit the real plant code. The sketch prints only the HTTP status, not the code.
 
 ### Parts kits
 
-The parts on a PM task are the kit. When you **Make work order**, those parts are reserved to that job and pulled from stock (the on-hand count drops, and a reservation row says `issued`). **Reorder CSV** is the shopping list.
+The parts on a PM task are the kit. When you **Make work order**, those parts are reserved to that job and pulled from stock (the on-hand count drops, and a reservation row says `issued`). A PM with no parts does not say the kit was reserved. Cancelling that work order returns the parts and marks the reservation `cancelled`. **Reorder CSV** is the shopping list.
 
 ### Voice work order
 
@@ -225,7 +225,7 @@ Do this whenever `Code.gs` in this repo changes. The page on GitHub Pages update
 
 The first time you save a photo, send an alert, or run the digest, Google asks for more permission:
 
-- **Drive** — to create the Plant Maintenance Photos folder and store pictures.
+- **Drive** — to create the private Plant Maintenance Photos folder and store pictures. The files are not shared by link.
 - **Gmail** (sending email as you) — for the morning digest, the machine-down note, and an out-of-range sensor.
 - **Script triggers** — only if you run **installDigestTrigger** from the editor. That is a daily timer, not a new web address.
 

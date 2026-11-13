@@ -12,7 +12,6 @@
   const PERMANENT = {
     "bad batch": "The sheet rejected a save because it was too big or not valid. That save was not kept, and it will not be retried.",
     "bad id": "The sheet rejected a save because an id was not valid. That save was not kept, and it will not be retried.",
-    "unknown collection": "The sheet rejected a save it did not recognize. That save was not kept, and it will not be retried.",
     "bad op": "The sheet rejected a save it could not apply. That save was not kept, and it will not be retried.",
     "bad request": "The sheet could not read that save. It was not kept, and it will not be retried."
   };
@@ -33,6 +32,9 @@
   function code() { try { return localStorage.getItem(CODE_KEY) || ""; } catch (e) { return ""; } }
   function isPermanent(e) {
     return !!(e && e.code === "server" && Object.prototype.hasOwnProperty.call(PERMANENT, String(e.message || "")));
+  }
+  function needsScript(e) {
+    return !!(e && e.code === "server" && /^(unknown collection|unknown action)$/.test(String(e.message || "")));
   }
   function rejectText(e) {
     const msg = String((e && e.message) || "");
@@ -76,13 +78,18 @@
     if (!scriptUrl()) return { ok: true, fallback: true, dataUrl: dataUrl };
     return call("photo", { dataUrl: dataUrl, name: name || "photo" });
   }
-  async function notify(subject, body) {
+  async function notify(kind, assetId) {
     if (!scriptUrl()) return { ok: true, skipped: true };
-    return call("notify", { subject: subject, body: body });
+    return call("notify", { kind: kind, assetId: assetId || "" });
+  }
+  async function fetchPhoto(driveFileId) {
+    if (!scriptUrl() || !driveFileId) return { ok: false };
+    return call("photoGet", { driveFileId: driveFileId });
   }
   function unpack(j) {
     const state = PM.emptyState();
     for (const name of Object.keys(PM.FIELDS)) state[name] = Array.isArray(j[name]) ? j[name] : [];
+    if (PM.recentSensorLogs) state.sensorLogs = PM.recentSensorLogs(state.sensorLogs, PM.today(), 30, 500);
     return state;
   }
 
@@ -91,6 +98,7 @@
     pending: 0,
     unreachable: false,
     rejected: "",
+    scriptStale: false,
     authProblem: false,
     load() {
       const live = !!scriptUrl();
@@ -119,6 +127,7 @@
     saveCode(v) { try { localStorage.setItem(CODE_KEY, v || ""); } catch (e) {} },
     uploadPhoto,
     notify,
+    fetchPhoto,
     remember(state) {
       const key = scriptUrl() ? CACHE_KEY : SAMPLE_KEY;
       const payload = scriptUrl() ? { state, savedAt: new Date().toISOString() } : state;
@@ -140,6 +149,7 @@
       const queued = [];
       let rejected = "";
       let unauthorized = false;
+      let stale = false;
       let sent = 0;
       for (let i = 0; i < items.length; i++) {
         try {
@@ -150,6 +160,12 @@
             unauthorized = true;
             this.authProblem = true;
             this.unreachable = false;
+            for (let j = i; j < items.length; j++) queued.push(items[j]);
+            break;
+          }
+          if (needsScript(e)) {
+            stale = true;
+            this.scriptStale = true;
             for (let j = i; j < items.length; j++) queued.push(items[j]);
             break;
           }
@@ -177,9 +193,18 @@
         };
       }
       if (rejected) return { ok: false, rejected: true, queued: queued.length > 0, sent, message: rejected };
+      if (stale && queued.length) {
+        return {
+          ok: false,
+          queued: true,
+          scriptStale: true,
+          message: "The Google script needs an update. This change is saved on this phone and will sync after you redeploy Code.gs."
+        };
+      }
       if (queued.length) return { ok: false, queued: true };
       this.unreachable = false;
       this.authProblem = false;
+      this.scriptStale = false;
       return { ok: true, queued: false };
     },
     async flush() {
@@ -200,6 +225,11 @@
               writeQueue(q);
               continue;
             }
+          }
+          if (needsScript(e)) {
+            this.scriptStale = true;
+            writeQueue(q);
+            return { ok: false, scriptStale: true, dropped };
           }
           if (isPermanent(e)) {
             q.shift();
@@ -223,6 +253,7 @@
       this.pending = 0;
       this.authProblem = false;
       this.unreachable = false;
+      this.scriptStale = false;
       return { ok: true, dropped };
     },
     async refresh(opt) {

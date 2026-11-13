@@ -16,19 +16,28 @@
     return QR.svg(text, 2);
   }
   function compressFile(file) {
+    const limit = (globalThis.PM && PM.PHOTO_MAX) || 45000;
+    const steps = [[1280, 0.7], [1024, 0.6], [800, 0.55], [640, 0.5], [480, 0.45], [360, 0.4]];
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new Error("Couldn't read that photo"));
       reader.onload = () => {
         const img = new Image();
         img.onload = () => {
-          const max = 1280;
-          let w = img.width, h = img.height;
-          if (w > max || h > max) { const s = max / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
           const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL("image/jpeg", 0.7));
+          const draw = (i) => {
+            const max = steps[i][0];
+            let w = img.width, h = img.height;
+            if (w > max || h > max) { const s = max / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+            const url = canvas.toDataURL("image/jpeg", steps[i][1]);
+            if (url.length <= limit || i === steps.length - 1) {
+              if (url.length > limit) reject(new Error("That photo is still too big to store. It was not saved."));
+              else resolve(url);
+            } else draw(i + 1);
+          };
+          draw(0);
         };
         img.onerror = () => reject(new Error("That file isn't a photo the phone can use"));
         img.src = reader.result;
@@ -62,7 +71,11 @@
     assetExtra(a, esc) {
       const bits = [];
       if (shown("qr")) bits.push(`<a class="btn" href="#labels/${esc(a.id)}">QR label</a>`);
-      if (shown("down")) bits.push(`<button class="btn ${a.status === "Down" ? "primary" : "danger"}" type="button" data-floor="${a.status === "Down" ? "up" : "down"}" data-id="${esc(a.id)}">${a.status === "Down" ? "Back up" : "Machine down"}</button>`);
+      if (shown("down")) {
+        const clock = (window.__floorState && window.__floorState.downtimeEvents) || [];
+        const action = PM().downAction(a, clock);
+        bits.push(`<button class="btn ${action === "up" ? "primary" : "danger"}" type="button" data-floor="${action}" data-id="${esc(a.id)}">${action === "up" ? "Back up" : "Machine down"}</button>`);
+      }
       return bits.join("");
     },
     assetPanels(a, esc) {
@@ -96,8 +109,8 @@
     photoPanel(w, esc) {
       if (!shown("photos")) return "";
       const photos = ((window.__floorState || {}).photos || []).filter(p => p.workOrderId === w.id);
-      return `<article class="panel"><h2>Photos</h2><p class="note">Before, after, nameplate, or a part number. Pictures are compressed on the phone. With the sheet connected they go to a Drive folder named Plant Maintenance Photos. If Drive isn't available, a small copy is kept on the sheet.</p>
-        <div class="shots">${photos.map(p => `<figure><img class="shot" alt="${esc(p.kind)}" src="${esc(p.url || p.dataUrl)}"><figcaption>${esc(p.kind)}</figcaption></figure>`).join("") || `<p class="note">No photos yet.</p>`}</div>
+      return `<article class="panel"><h2>Photos</h2><p class="note">Before, after, nameplate, or a part number. Pictures are compressed on the phone. With the sheet connected they go to a private Drive folder. This phone loads them back with the plant code. If Drive isn't available, a small copy is kept on the sheet. A picture that is still too big is not saved.</p>
+        <div class="shots">${photos.map(p => `<figure><img class="shot" alt="${esc(p.kind)}" ${p.dataUrl ? `src="${esc(p.dataUrl)}"` : ""} ${p.driveFileId ? `data-drive="${esc(p.driveFileId)}"` : ""}><figcaption>${esc(p.kind)}</figcaption></figure>`).join("") || `<p class="note">No photos yet.</p>`}</div>
         <div class="g2"><div class="f"><label for="photoKind">Kind</label><select id="photoKind"><option value="before">Before</option><option value="after">After</option><option value="nameplate">Nameplate</option><option value="part">Part number</option><option value="other">Other</option></select></div>
           <div class="f"><label for="photoFile">Picture</label><input id="photoFile" type="file" accept="image/*" capture="environment"></div></div>
         <button class="btn" type="button" data-floor="add-photo" data-id="${esc(w.id)}" data-asset="${esc(w.assetId || "")}">Save photo</button></article>`;
@@ -121,7 +134,7 @@
       if (action === "down") {
         const result = P.machineDown(ctx.state, { assetId: id, note: "Marked down from the phone" });
         const ok = await ctx.commit(result);
-        if (ok && result.notify) ctx.notify(result.state.assets.find(a => a.id === id).tag + " is down", (result.state.assets.find(a => a.id === id).tag) + " was marked down. The downtime clock is running.");
+        if (ok && result.notify) ctx.notify("machine-down", id);
       } else if (action === "up") {
         await ctx.commit(P.machineUp(ctx.state, { assetId: id }));
       } else if (action === "add-loto") lotoForm(ctx, id);
@@ -387,7 +400,7 @@
       () => document.getElementById("sSave").onclick = async () => {
         const result = PM().ingestSensor(ctx.state, { assetId, name: document.getElementById("sName").value, value: document.getElementById("sVal").value, type: document.getElementById("sType").value, source: "manual", date: PM().today() });
         const ok = await ctx.commit(result);
-        if (ok && result.flag && result.flag !== "ok") ctx.notify("Reading out of range", result.message);
+        if (ok && result.flag && result.flag !== "ok") ctx.notify("sensor-range", result.assetId || id);
       });
   }
   function templateForm(ctx) {
@@ -408,21 +421,35 @@
     if (!file) { ctx.toast("Choose a photo first."); return; }
     let dataUrl = "";
     try { dataUrl = await compressFile(file); } catch (e) { ctx.toast(e.message); return; }
+    const check = PM().acceptPhotoData(dataUrl);
+    if (!check.ok) { ctx.toast(check.message); return; }
     let stored = { dataUrl, url: "", driveFileId: "" };
     if (ctx.Store.mode === "live" && ctx.uploadPhoto) {
       try {
         const up = await ctx.uploadPhoto(dataUrl, file.name || "photo");
-        if (up && up.driveFileId) stored = { dataUrl: "", url: up.url || "", driveFileId: up.driveFileId };
-        else if (up && up.fallback) stored = { dataUrl: up.dataUrl || dataUrl, url: "", driveFileId: "" };
-      } catch (e) { stored = { dataUrl, url: "", driveFileId: "" }; }
+        if (up && up.ok === false) { ctx.toast(up.error === "photo too large" ? "That photo is still too big to store. It was not saved." : "That photo was not saved."); return; }
+        if (up && up.driveFileId) stored = { dataUrl: "", url: "", driveFileId: up.driveFileId };
+        else if (up && up.fallback && up.dataUrl && up.dataUrl === dataUrl) stored = { dataUrl: up.dataUrl, url: "", driveFileId: "" };
+        else { ctx.toast("That photo was not saved."); return; }
+      } catch (e) { ctx.toast("That photo was not saved."); return; }
     }
     await ctx.commit(PM().addPhoto(ctx.state, { workOrderId: woId, assetId, kind: document.getElementById("photoKind").value, name: file.name, dataUrl: stored.dataUrl, url: stored.url, driveFileId: stored.driveFileId, techId: ctx.ui.me }));
   }
 
+  function loadDrivePhotos(root) {
+    if (!root || !globalThis.Store || !Store.fetchPhoto) return;
+    root.querySelectorAll("img[data-drive]").forEach(img => {
+      if (img.getAttribute("src")) return;
+      Store.fetchPhoto(img.getAttribute("data-drive")).then(r => {
+        if (r && r.dataUrl) img.src = r.dataUrl;
+      }).catch(() => { img.alt = "Photo couldn't be loaded"; });
+    });
+  }
   document.addEventListener("click", e => {
     const btn = e.target.closest("[data-floor]");
     if (!btn) return;
     Floor.onAction(btn.dataset.floor, btn);
   });
+  Floor.loadDrivePhotos = loadDrivePhotos;
   globalThis.Floor = Floor;
 })();

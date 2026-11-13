@@ -140,6 +140,8 @@
       }
     }
     setF(8, n - 8, 1);
+    const reserved = formatCoords(n);
+    reserved[0].concat(reserved[1]).forEach(([x, y]) => setF(x, y, 0));
     const bits = [];
     pack.data.concat(pack.ecc).forEach(by => { for (let i = 7; i >= 0; i--) bits.push((by >>> i) & 1); });
     let bi = 0;
@@ -170,24 +172,29 @@
       default: return (((x + y) % 2) + ((x * y) % 3)) % 2 === 0;
     }
   }
+  /* 15 format bits, ECC level L (01) plus the mask. The value matches the spec;
+     the modules below are where those bits have to sit, MSB first. */
   function formatBits(mask) {
     const data = (0b01 << 3) | mask;
-    let rem = data << 10;
-    for (let i = 14; i >= 10; i--) if ((rem >>> i) & 1) rem ^= 0b10100110111 << (i - 10);
-    return ((data << 10) | rem) ^ 0b101010000010010;
+    let rem = data;
+    for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+    return ((data << 10) | rem) ^ 0x5412;
+  }
+  function formatCoords(n) {
+    const near = [];
+    for (let i = 0; i <= 5; i++) near.push([i, 8]);
+    near.push([7, 8], [8, 8], [8, 7]);
+    for (let i = 5; i >= 0; i--) near.push([8, i]);
+    const far = [];
+    for (let i = 1; i <= 7; i++) far.push([8, n - i]);
+    for (let i = 8; i >= 1; i--) far.push([n - i, 8]);
+    return [near, far];
   }
   function applyFormat(modules, func, mask) {
     const n = modules.length;
     const bits = formatBits(mask);
-    const coords = [];
-    for (let i = 0; i <= 5; i++) coords.push([8, i]);
-    coords.push([8, 7], [8, 8], [7, 8]);
-    for (let i = 5; i >= 0; i--) coords.push([i, 8]);
-    const coords2 = [];
-    for (let i = 0; i < 7; i++) coords2.push([n - 1 - i, 8]);
-    for (let i = 0; i < 8; i++) coords2.push([8, n - 8 + i]);
-    coords.forEach(([x, y], i) => { modules[y][x] = (bits >>> (14 - i)) & 1; });
-    coords2.forEach(([x, y], i) => { modules[y][x] = (bits >>> (14 - i)) & 1; });
+    const pair = formatCoords(n);
+    pair[0].concat(pair[1]).forEach(([x, y], i) => { modules[y][x] = (bits >>> (14 - i)) & 1; if (func) func[y][x] = true; });
     modules[n - 8][8] = 1;
   }
   function penalty(m) {

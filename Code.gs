@@ -61,10 +61,13 @@ function handle(p) {
     if (String(p.code || '') !== ACCESS_CODE) return out({ ok: false, error: 'unauthorized' });
     if (p.action === 'list') {
       const body = { ok: true };
-      DATA.forEach(name => { body[name] = readAll(name); });
+      DATA.forEach(function (name) {
+        body[name] = name === 'sensorLogs' ? sensorLogsForPhones() : readAll(name);
+      });
       return out(body);
     }
     if (p.action === 'photo') return savePhotoFile(p);
+    if (p.action === 'photoGet') return readPhotoFile(p);
     if (p.action === 'notify') return sendAlert(p);
     if (p.action === 'sensor') return ingestSensor(p);
     if (p.action === 'batch') return batch(p);
@@ -326,7 +329,12 @@ function writeDoc(name, id, data) {
     const v = data[c];
     if (v === null || v === undefined) row[idx] = '';
     else if (NUMERIC.indexOf(c) !== -1) row[idx] = v === '' ? '' : Number(v);
-    else row[idx] = String(v).slice(0, (c === 'dataUrl' || c === 'photoData') ? 45000 : 8000);
+    else {
+      var text = String(v);
+      var cap = (c === 'dataUrl' || c === 'photoData') ? 45000 : 8000;
+      if ((c === 'dataUrl' || c === 'photoData') && text.length > cap) throw new Error('photo too large');
+      row[idx] = sheetSafe(text.slice(0, cap));
+    }
   });
   const r = findRow(sh, id) || sh.getLastRow() + 1;
   sh.getRange(r, 1, 1, width).setValues([row]);
@@ -342,15 +350,33 @@ function setup() {
   DATA.concat(['applied']).forEach(name => sheet(name));
 }
 
-function photoFolder() {
-  const name = 'Plant Maintenance Photos';
-  const it = DriveApp.getFoldersByName(name);
-  const folder = it.hasNext() ? it.next() : DriveApp.createFolder(name);
-  return folder;
+function sheetSafe(v) {
+  var s = String(v == null ? '' : v);
+  if (/^[=+\-@\t\r]/.test(s)) return "'" + s;
+  return s;
 }
 
-/* Photos go to a Drive folder. If Drive isn't authorized, the phone keeps a
-   compressed copy in the sheet instead. The plant code is never written on the file. */
+/* The photos folder id is stored on the script. A same-named folder that
+   belongs to someone else is never used. Files stay private. */
+function photoFolder() {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'PHOTO_FOLDER_ID';
+  var id = props.getProperty(key);
+  if (id) {
+    try {
+      var existing = DriveApp.getFolderById(id);
+      if (existing && !existing.isTrashed()) return existing;
+    } catch (err) {}
+  }
+  var created = DriveApp.createFolder('Plant Maintenance Photos');
+  props.setProperty(key, created.getId());
+  return created;
+}
+
+/* Photos go to a private Drive folder. The phone loads them back with photoGet,
+   which checks the plant code first. If Drive isn't authorized and the picture
+   still fits in one cell, the full data URL is returned. A picture that does
+   not fit is refused. A cut-off image is never stored. */
 function savePhotoFile(p) {
   const raw = String(p.dataUrl || '');
   const comma = raw.indexOf(',');
@@ -360,10 +386,23 @@ function savePhotoFile(p) {
     const bytes = Utilities.base64Decode(b64);
     const blob = Utilities.newBlob(bytes, 'image/jpeg', String(p.name || 'photo').replace(/[^\w.-]+/g, '_') + '.jpg');
     const file = photoFolder().createFile(blob);
-    try { file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (shareErr) {}
-    return out({ ok: true, driveFileId: file.getId(), url: 'https://drive.google.com/uc?export=view&id=' + file.getId(), fallback: false });
+    return out({ ok: true, driveFileId: file.getId(), url: '', fallback: false });
   } catch (err) {
-    return out({ ok: true, fallback: true, driveFileId: '', url: '', dataUrl: raw.slice(0, 45000) });
+    if (raw.length > 45000) return out({ ok: false, error: 'photo too large' });
+    return out({ ok: true, fallback: true, driveFileId: '', url: '', dataUrl: raw });
+  }
+}
+
+function readPhotoFile(p) {
+  const id = String(p.driveFileId || '');
+  if (!id) return out({ ok: false, error: 'missing photo' });
+  try {
+    const file = DriveApp.getFileById(id);
+    const blob = file.getBlob();
+    const mime = blob.getContentType() || 'image/jpeg';
+    return out({ ok: true, dataUrl: 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes()), name: file.getName() });
+  } catch (err) {
+    return out({ ok: false, error: 'photo unavailable' });
   }
 }
 
@@ -373,11 +412,50 @@ function alertAddress() {
   return String(row.alertEmail || row.digestEmail || '').trim();
 }
 
+function alertWindowMs() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('SENSOR_ALERT_MINUTES') || '60');
+  if (!isFinite(n) || n <= 0) n = 60;
+  return n * 60000;
+}
+
+/* One note per key per window. Cache catches a burst. Script Properties remember
+   the last send after the cache entry expires. */
+function alertAllowed(key) {
+  var props = PropertiesService.getScriptProperties();
+  var full = 'alert:' + key;
+  var now = Date.now();
+  var windowMs = alertWindowMs();
+  var cache = CacheService.getScriptCache();
+  if (cache.get(full)) return false;
+  var last = Number(props.getProperty(full) || '0');
+  if (last && now - last < windowMs) return false;
+  props.setProperty(full, String(now));
+  try { cache.put(full, '1', Math.max(1, Math.min(21600, Math.ceil(windowMs / 1000)))); } catch (err) {}
+  return true;
+}
+
+/* Subjects and bodies are built here from the sheet. The request cannot supply either. */
 function sendAlert(p) {
   const to = alertAddress();
   if (!to) return out({ ok: true, skipped: true, message: 'No alert email is saved yet.' });
-  const subject = String(p.subject || 'Plant maintenance').slice(0, 180);
-  const body = String(p.body || '').slice(0, 8000);
+  const kind = String(p.kind || '');
+  const asset = p.assetId ? readDoc('assets', p.assetId) : findAssetByTag(p.tag);
+  if (!asset) return out({ ok: false, error: 'unknown asset' });
+  let subject = '';
+  let body = '';
+  if (kind === 'machine-down') {
+    if (!alertAllowed('down:' + asset.id)) return out({ ok: true, skipped: true, message: 'Down alert already sent.' });
+    subject = 'Machine down: ' + asset.tag;
+    body = asset.tag + ' ' + asset.name + ' was marked down. The downtime clock is running.';
+  } else if (kind === 'machine-up') {
+    if (!alertAllowed('up:' + asset.id)) return out({ ok: true, skipped: true, message: 'Up alert already sent.' });
+    subject = 'Machine back up: ' + asset.tag;
+    body = asset.tag + ' ' + asset.name + ' is back up.';
+  } else if (kind === 'sensor-range') {
+    if (!alertAllowed('sensor-manual:' + asset.id)) return out({ ok: true, skipped: true, message: 'Range alert already sent.' });
+    subject = 'Reading out of range: ' + asset.tag;
+    body = asset.tag + ' ' + asset.name + ' has a reading outside its limits.';
+  } else return out({ ok: false, error: 'unknown alert' });
   MailApp.sendEmail(to, subject, body);
   return out({ ok: true, sent: true });
 }
@@ -389,14 +467,41 @@ function findAssetByTag(tag) {
   return null;
 }
 
+/* Phones only receive the recent window. Older rows stay on the sheet. */
+function sensorLogsForPhones() {
+  var rows = readAll('sensorLogs');
+  var cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  var iso = Utilities.formatDate(cutoff, Session.getScriptTimeZone() || 'UTC', 'yyyy-MM-dd');
+  var kept = rows.filter(function (r) {
+    var d = String(r.date || r.createdAt || '').slice(0, 10);
+    return d && d >= iso;
+  });
+  kept.sort(function (a, b) { return String(b.createdAt || '').localeCompare(String(a.createdAt || '')); });
+  if (kept.length > 500) kept = kept.slice(0, 500);
+  return kept;
+}
+
 /* ESP32 and the phone both use this. The plant code stays in the request only
    long enough to check it. It is not stored on the reading. */
 function ingestSensor(p) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return ingestSensorLocked(p); }
+  finally { lock.releaseLock(); }
+}
+
+function ingestSensorLocked(p) {
   const asset = p.assetId ? readDoc('assets', p.assetId) : findAssetByTag(p.tag);
   if (!asset) return out({ ok: false, error: 'unknown asset' });
   const value = Number(p.value);
-  if (!isFinite(value)) return out({ ok: false, error: 'bad value' });
   const type = String(p.type || 'other').toLowerCase();
+  const meterLike = type === 'hours' || type === 'meter' || type === 'cycles';
+  if (meterLike) {
+    if (!isFinite(value) || value <= 0) return out({ ok: false, error: 'bad meter' });
+    var metered = String(asset.metered) === 'yes';
+    var current = Number(asset.meter);
+    if (metered && asset.meter !== '' && isFinite(current) && value < current) return out({ ok: false, error: 'meter went backwards' });
+  } else if (!isFinite(value)) return out({ ok: false, error: 'bad value' });
   const name = String(p.name || type).slice(0, 80);
   const limits = readAll('sensorLimits').filter(function (l) { return l.assetId === asset.id && String(l.name).toLowerCase() === name.toLowerCase() && String(l.active) !== 'no'; });
   const limit = limits[0];
@@ -411,21 +516,20 @@ function ingestSensor(p) {
     value: value, type: type, date: String(p.date || day).slice(0, 10), source: String(p.source || 'esp32'),
     flag: flag, note: String(p.note || '').slice(0, 500), createdAt: now
   });
-  let pmDue = false;
-  if (type === 'hours' || type === 'meter' || type === 'cycles') {
+  if (meterLike && String(asset.metered) === 'yes') {
     asset.meter = value;
     asset.updatedAt = now;
     writeDoc('assets', asset.id, asset);
     const rid = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
     writeDoc('readings', rid, { id: rid, assetId: asset.id, workOrderId: '', reading: value, techId: '', date: day, notes: 'Sensor ' + name, createdAt: now });
   }
-  if (flag !== 'ok') {
+  if (flag !== 'ok' && alertAllowed('sensor:' + asset.id + ':' + type)) {
     const to = alertAddress();
     if (to) {
-      try { MailApp.sendEmail(to, asset.tag + ' ' + name + ' is out of range', asset.tag + ' ' + name + ' read ' + value + ' (' + flag + ').'); } catch (mailErr) {}
+      try { MailApp.sendEmail(to, asset.tag + ' reading out of range', asset.tag + ' ' + name + ' read ' + value + ' (' + flag + ').'); } catch (mailErr) {}
     }
   }
-  return out({ ok: true, id: id, flag: flag, asset: asset.tag, pmDue: pmDue });
+  return out({ ok: true, id: id, flag: flag, asset: asset.tag });
 }
 
 function digestText() {
@@ -453,9 +557,20 @@ function plantDigest() {
 }
 
 /** Run once from the editor. It replaces any older digest trigger. Does not change the web app URL. */
+function digestHour() {
+  const rows = readAll('settings');
+  const row = rows.filter(function (r) { return r.id === 'plantcfg'; })[0] || {};
+  let h = parseInt(row.digestHour, 10);
+  if (!isFinite(h) || h < 0 || h > 23) h = 6;
+  return h;
+}
+
+/** Run once from the editor. It replaces any older digest trigger. Does not change the web app URL.
+    The hour is the digest Hour saved in the app, read in the script timezone.
+    Set that timezone to America/New_York (Project settings) or the mail will not arrive at 6am Eastern. */
 function installDigestTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     if (t.getHandlerFunction() === 'plantDigest') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('plantDigest').timeBased().everyDays(1).atHour(6).create();
+  ScriptApp.newTrigger('plantDigest').timeBased().everyDays(1).atHour(digestHour()).create();
 }
