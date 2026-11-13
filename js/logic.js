@@ -1077,6 +1077,7 @@
 
   /* A cell that starts with = + - @ or a control character is a formula in Excel and Sheets. */
   function sheetSafe(v) {
+    if (typeof v === "number" && isFinite(v)) return String(v);
     const s = v == null ? "" : String(v);
     return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
   }
@@ -1086,6 +1087,38 @@
     if (!raw) return { ok: false, message: "That photo was empty. It was not saved." };
     if (raw.length > PHOTO_MAX) return { ok: false, message: "That photo is still too big to store. It was not saved." };
     return { ok: true, dataUrl: raw };
+  }
+  /* Same rules as Code.gs sensorKeepSample. A steady reading is not a new row. */
+  function sensorShouldStore(last, sample, everyMin) {
+    const mins = Number(everyMin) > 0 ? Number(everyMin) : 15;
+    sample = sample || {};
+    const flag = sample.flag || "ok";
+    if (!last) return { store: true, reason: "first" };
+    const prevFlag = last.flag || "ok";
+    if (flag !== "ok") return { store: true, reason: "out" };
+    if (prevFlag !== "ok") return { store: true, reason: "back" };
+    const prev = Number(last.value);
+    const next = Number(sample.value);
+    const delta = Number(sample.delta);
+    const span = isFinite(delta) && delta > 0 ? delta : Math.max(0.5, Math.abs(prev) * 0.01);
+    if (isFinite(prev) && isFinite(next) && Math.abs(next - prev) >= span) return { store: true, reason: "change" };
+    const age = Number(sample.now) - Number(last.at || last.createdAt || 0);
+    if (age >= mins * 60000) return { store: true, reason: "interval" };
+    return { store: false, reason: "steady" };
+  }
+  /* One mail when a reading leaves the limits, a reminder every few hours, and one when it returns. */
+  function sensorAlertPlan(prev, sample, now, remindHours) {
+    const hours = Number(remindHours) > 0 ? Number(remindHours) : 4;
+    const flag = (sample && sample.flag) || "ok";
+    const was = (prev && prev.flag) || "ok";
+    const lastAlert = prev && Number(prev.lastAlert) ? Number(prev.lastAlert) : 0;
+    if (flag !== "ok" && was === "ok") return { send: "out", state: { flag, lastAlert: now } };
+    if (flag !== "ok") {
+      if (Number(now) - lastAlert >= hours * 3600000) return { send: "remind", state: { flag, lastAlert: now } };
+      return { send: "", state: { flag, lastAlert } };
+    }
+    if (was !== "ok") return { send: "back", state: { flag: "ok", lastAlert: 0 } };
+    return { send: "", state: { flag: "ok", lastAlert: 0 } };
   }
   function sensorAlertDue(lastMs, nowMs, windowMin) {
     const windowMs = (Number(windowMin) > 0 ? Number(windowMin) : 60) * 60000;
@@ -1211,7 +1244,7 @@
     if (pri) priority = pri[1].charAt(0).toUpperCase() + pri[1].slice(1);
     const todayIso = opts.today || today();
     let dueDate = "";
-    const dueWord = lastMatch(lower, /\b(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+    const dueWord = lastMatch(lower, /\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
     if (dueWord) {
       const word = dueWord[1].toLowerCase();
       if (word === "today") dueDate = todayIso;
@@ -1243,14 +1276,32 @@
       .replace(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/ig, "")
       .replace(/\bassign(?:ed)?\s+to\s+[a-z][a-z .'-]{1,40}/ig, "")
       .replace(/\b(?:location|area)\s+(?:is\s+|to\s+)?[a-z0-9][a-z0-9 .'-]{0,60}/ig, "")
-      .replace(/\b(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, "")
+      .replace(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, "")
       .replace(/\s+,/g, ",").replace(/^[,\s]+|[,\s]+$/g, "").replace(/\s{2,}/g, " ").trim();
     if (!description) description = text;
     const title = description.split(/[.]/)[0].slice(0, 80);
     return {
       type, priority, dueDate, assignedTo, assignedName, location,
       assetId: asset ? asset.id : "", assetTag: asset ? asset.tag : "", assetName: asset ? asset.name : "",
-      title, description, transcript: text
+      title, description, transcript: text,
+      needsAsset: type !== GENERAL_TYPE && !asset
+    };
+  }
+  function voiceSaveFields(parsed, chosenAssetId) {
+    parsed = parsed || {};
+    let type = parsed.type || "Repair";
+    let assetId = parsed.assetId || "";
+    if (!assetId && chosenAssetId) assetId = String(chosenAssetId);
+    if (!assetId && type !== GENERAL_TYPE) type = GENERAL_TYPE;
+    return {
+      type, assetId,
+      location: parsed.location || "",
+      title: parsed.title || parsed.description || "",
+      description: parsed.description || parsed.title || "",
+      priority: parsed.priority || "Normal",
+      assignedTo: parsed.assignedTo || "",
+      dueDate: parsed.dueDate || "",
+      voiceTranscript: parsed.transcript || ""
     };
   }
   function applyVoiceCommand(parsed, utterance, state, opts) {
@@ -1271,7 +1322,8 @@
     parsed = parsed || {};
     const bits = [parsed.type || "Repair"];
     if (parsed.assetTag) bits.push("on " + parsed.assetTag + (parsed.assetName ? " " + parsed.assetName : ""));
-    else bits.push("no machine, general");
+    else if (parsed.type === GENERAL_TYPE) bits.push("no machine, general");
+    else bits.push("no machine yet");
     if (parsed.location) bits.push("location " + parsed.location);
     if (parsed.description) bits.push(parsed.description);
     if (parsed.priority && parsed.priority !== "Normal") bits.push("priority " + parsed.priority);
@@ -1348,7 +1400,7 @@
     saveTech, deleteTech, saveAsset, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
     generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
-    PHOTO_MAX, acceptPhotoData, sensorAlertDue, meterReadingOk, recentSensorLogs,
-    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, voiceSummary
+    PHOTO_MAX, acceptPhotoData, sensorAlertDue, sensorShouldStore, sensorAlertPlan, meterReadingOk, recentSensorLogs,
+    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, voiceSaveFields, voiceSummary
   };
 });

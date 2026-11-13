@@ -196,7 +196,16 @@ On the machine: what is covered, who the vendor is, and the end date. **Floor â†
 
 ### ESP32 sensor tie-in
 
-The script accepts `action: "sensor"` with the plant code, an asset tag, a name, a type, and a value. It stores the reading and compares it to that machine's limits. An out-of-range reading emails the alert address at most once per machine and reading type in the window above. Types `hours`, `meter`, and `cycles` update the hour meter only on a machine that has a meter, and only when the new number is higher than the one already stored. Zero, blank, and negative meter posts are refused. Phones sync the last 30 days of readings (500 rows at most). Older rows stay on the sheet and are not copied to every phone. A starter sketch is in `examples/esp32-sensor.ino`. It checks Google's certificate (GTS Root R1) instead of skipping the check. Put your own code and URL in the sketch. Don't commit the real plant code. The sketch prints only the HTTP status, not the code.
+The script accepts `action: "sensor"` with the plant code, an asset tag, a name, a type, and a value. It stores a row when the value moves, when it is outside the limits, or at most every 15 minutes if it is sitting still. Change that gap with the script property `SENSOR_SAMPLE_MINUTES`. Types `hours`, `meter`, and `cycles` update the hour meter only on a machine that has a meter, and only when the new number is higher than the one already stored and the sample is one that gets stored. Zero, blank, and negative meter posts are refused. The first time a reading leaves the limits, the script sends one email. If it stays out, a reminder goes out at most every 4 hours (`SENSOR_REMIND_HOURS`). When it comes back inside the limits, one "back in range" email is sent. Phones sync the last 30 days of readings (500 rows at most). Older rows stay on the sheet and are not copied to every phone.
+
+A starter sketch is in `examples/esp32-sensor.ino`. It checks the certificate instead of skipping that check. As of this writing, `script.google.com` and `script.googleusercontent.com` (the address the script redirects to) chain through Google's WE2 intermediate to **GTS Root R4**. Root R1 does not verify that chain. The sketch pins R4 and also keeps R1. To see what is live:
+
+```
+openssl s_client -showcerts -connect script.google.com:443 -servername script.google.com </dev/null
+openssl s_client -showcerts -connect script.googleusercontent.com:443 -servername script.googleusercontent.com </dev/null
+```
+
+The issuer of the WE2 certificate is the root to download from [https://pki.goog/repository/](https://pki.goog/repository/) (`gtsr4.pem` today). Paste that PEM into `GTS_ROOTS` in the sketch. Put your own code and URL in the sketch. Don't commit the real plant code. The sketch prints only the HTTP status, not the code.
 
 ### Parts kits
 

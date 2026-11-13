@@ -131,12 +131,20 @@
     root.querySelectorAll("input, textarea").forEach(field => {
       if (field.dataset.micAttached) return;
       const type = (field.getAttribute("type") || "text").toLowerCase();
+      if (type === "password" || field.dataset.secret === "1" || field.id === "plantCode") return;
       if (field.tagName === "INPUT" && !["text", "search", "email", "tel", "number"].includes(type)) return;
       field.dataset.micAttached = "1";
-      if (!field.getAttribute("autocomplete") || field.getAttribute("autocomplete") === "off") field.setAttribute("autocomplete", "on");
-      field.setAttribute("autocorrect", "on");
-      if (!field.getAttribute("autocapitalize")) field.setAttribute("autocapitalize", "sentences");
-      field.setAttribute("spellcheck", "true");
+      const codeLike = field.dataset.code === "1";
+      if (codeLike) {
+        field.setAttribute("autocorrect", "off");
+        field.setAttribute("autocapitalize", "off");
+        field.setAttribute("spellcheck", "false");
+      } else {
+        if (!field.getAttribute("autocomplete") || field.getAttribute("autocomplete") === "off") field.setAttribute("autocomplete", "on");
+        field.setAttribute("autocorrect", "on");
+        if (!field.getAttribute("autocapitalize")) field.setAttribute("autocapitalize", "sentences");
+        field.setAttribute("spellcheck", "true");
+      }
       if (!speechOk()) return;
       const btn = document.createElement("button");
       btn.type = "button";
@@ -875,14 +883,14 @@
   function assetForm(existing) {
     const a = existing || { status: "Running", metered: "no", meterType: "Hours" };
     openSheet(existing ? "Edit " + a.tag : "New equipment", `
-      <div class="g2"><div class="f"><label for="aTag">Tag</label><input id="aTag" type="text" value="${esc(a.tag || "")}" autocomplete="on" placeholder="WL-1"></div>
+      <div class="g2"><div class="f"><label for="aTag">Tag</label><input id="aTag" data-code="1" type="text" value="${esc(a.tag || "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="WL-1"></div>
         <div class="f"><label for="aName">Name</label><input id="aName" type="text" value="${esc(a.name || "")}" autocomplete="on"></div></div>
       <div class="g2"><div class="f"><label for="aArea">Area</label><input id="aArea" type="text" value="${esc(a.area || "")}"></div>
         <div class="f"><label for="aType">Type</label><input id="aType" type="text" value="${esc(a.type || "")}"></div></div>
       <div class="g3"><div class="f"><label for="aMake">Make</label><input id="aMake" type="text" value="${esc(a.make || "")}"></div>
         <div class="f"><label for="aModel">Model</label><input id="aModel" type="text" value="${esc(a.model || "")}"></div>
         <div class="f"><label for="aYear">Year</label><input id="aYear" type="number" value="${esc(a.year || "")}"></div></div>
-      <div class="f"><label for="aSerial">Serial</label><input id="aSerial" type="text" value="${esc(a.serial || "")}" autocomplete="on"></div>
+      <div class="f"><label for="aSerial">Serial</label><input id="aSerial" data-code="1" type="text" value="${esc(a.serial || "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></div>
       <div class="g2"><div class="f"><label for="aStatus">Status</label>${sel("aStatus", a.status || "Running", PM.ASSET_STATUSES.map(s => [s, s]))}</div>
         <div class="f"><label for="aMetered">Meter</label>${sel("aMetered", a.metered === "yes" ? "yes" : "no", [["no", "No meter — calendar PM"], ["yes", "Has a meter"]])}</div></div>
       <div class="g2" id="meterBits"><div class="f"><label for="aMType">Meter type</label>${sel("aMType", a.meterType || "Hours", PM.METER_TYPES.map(s => [s, s]))}</div>
@@ -988,7 +996,7 @@
   function partForm(existing) {
     const p = existing || {};
     openSheet(existing ? "Edit " + p.sku : "New part", `
-      <div class="g2"><div class="f"><label for="pSku">Part number</label><input id="pSku" type="text" value="${esc(p.sku || "")}" autocomplete="on"></div>
+      <div class="g2"><div class="f"><label for="pSku">Part number</label><input id="pSku" data-code="1" type="text" value="${esc(p.sku || "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></div>
         <div class="f"><label for="pName">Name</label><input id="pName" type="text" value="${esc(p.name || "")}" autocomplete="on"></div></div>
       <div class="g2"><div class="f"><label for="pBin">Bin</label><input id="pBin" type="text" value="${esc(p.bin || "")}"></div>
         <div class="f"><label for="pVendor">Vendor</label><input id="pVendor" type="text" value="${esc(p.vendor || "")}"></div></div>
@@ -1105,7 +1113,7 @@
 
   function askCode(wrong) {
     openSheet("Plant code", `<p class="note">Ask Randy for the plant code. You type it once on this phone. It is what keeps the shared sheet private.</p>
-      <div class="f"><label for="plantCode">Plant code</label><input id="plantCode" type="text" autocomplete="on" autocapitalize="off"></div>
+      <div class="f"><label for="plantCode">Plant code</label><input id="plantCode" type="password" data-secret="1" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></div>
       <div class="err" id="formErr">${wrong ? "That code didn't work." : ""}</div>`,
       `<span class="sp"></span><button class="btn primary" type="button" id="codeGo">Continue</button>`,
       () => {
@@ -1197,8 +1205,10 @@
       parsed = p;
       const card = byId("voiceCard");
       if (!card) return;
-      card.innerHTML = `<article class="panel"><p><b>${esc(p.type)}</b></p>
-        <p>${p.assetTag ? esc(p.assetTag + " " + p.assetName) : "No machine · General"}</p>
+      const askMachine = p.needsAsset && !p.assetId;
+      card.innerHTML = `<article class="panel"><p>Type <b>${esc(p.type)}</b></p>
+        <p>${p.assetTag ? esc(p.assetTag + " " + p.assetName) : (p.type === PM.GENERAL_TYPE ? "No machine · General" : "No machine yet")}</p>
+        ${askMachine ? `<div class="f"><label for="voiceAsset">Which machine?</label>${sel("voiceAsset", "", assetChoices("No machine — save as General"))}<p class="hint">Leave this blank and Save stores it as a General / plant task.</p></div>` : ""}
         ${p.location ? `<p>Location ${esc(p.location)}</p>` : ""}
         <p>${esc(p.description)}</p>
         <p>Priority ${esc(p.priority)}${p.assignedName ? " · " + esc(p.assignedName) : ""}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
@@ -1211,12 +1221,14 @@
     }
     function saveParsed() {
       if (!parsed) return;
+      const chosen = byId("voiceAsset") ? byId("voiceAsset").value : "";
+      const fields = PM.voiceSaveFields(parsed, chosen);
       stopVoiceSession();
       const result = PM.saveWo(state, {
-        type: parsed.type, assetId: parsed.assetId, location: parsed.location,
-        title: parsed.title || parsed.description, description: parsed.description,
-        priority: parsed.priority, assignedTo: parsed.assignedTo, dueDate: parsed.dueDate,
-        status: "open", source: "voice", voiceTranscript: parsed.transcript,
+        type: fields.type, assetId: fields.assetId, location: fields.location,
+        title: fields.title, description: fields.description,
+        priority: fields.priority, assignedTo: fields.assignedTo, dueDate: fields.dueDate,
+        status: "open", source: "voice", voiceTranscript: fields.voiceTranscript,
         openedDate: PM.today(), requestedBy: meName()
       });
       commit(result, { hash: result.ok ? "#wo/" + result.woId : "" });

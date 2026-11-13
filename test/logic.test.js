@@ -504,6 +504,17 @@ test("voice work order parses several phrasings, including a general task", () =
   const friday = PM.parseVoiceWorkOrder("Work order, panel saw, blade is dull, due Friday", s, { today });
   assert.equal(friday.assetTag, "PS-12");
   assert.equal(friday.dueDate, "2026-11-13");
+  const nameday = PM.parseVoiceWorkOrder("Work order, panel saw, Friday night shift is noisy", s, { today });
+  assert.equal(nameday.dueDate, "");
+  assert.match(nameday.description, /Friday night/);
+  const byDay = PM.parseVoiceWorkOrder("Work order, panel saw, blade is dull, by Monday", s, { today });
+  assert.equal(byDay.dueDate, "2026-11-16");
+  const nowhere = PM.parseVoiceWorkOrder("Work order, hose is wet somewhere", s, { today });
+  assert.equal(nowhere.assetId, "");
+  assert.equal(nowhere.needsAsset, true);
+  assert.equal(PM.voiceSaveFields(nowhere, "").type, "General / plant task");
+  assert.equal(PM.voiceSaveFields(nowhere, s.assets.find(a => a.tag === "WL-1").id).type, "Repair");
+  assert.equal(PM.voiceSaveFields(nowhere, s.assets.find(a => a.tag === "WL-1").id).assetId, s.assets.find(a => a.tag === "WL-1").id);
   const prefilled = PM.parseVoiceWorkOrder("Work order, hose is wet, due tomorrow", s, { today, assetId: s.assets.find(a => a.tag === "WL-1").id });
   assert.equal(prefilled.assetTag, "WL-1");
   assert.equal(prefilled.dueDate, "2026-11-13");
@@ -521,6 +532,7 @@ test("a photo that does not fit is refused and a short one is kept whole", () =>
   assert.match(gs, /PHOTO_FOLDER_ID/);
   assert.match(gs, /photoGet/);
   assert.match(gs, /photo too large/);
+  assert.match(gs, /getParents\(\)/);
 });
 
 test("meter posts reject junk and a lower reading, and skip a machine with no meter", () => {
@@ -555,9 +567,27 @@ test("out-of-range mail waits for the window", () => {
   assert.equal(PM.sensorAlertDue(now - 60 * 60000, now, 60), true);
   const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert.match(gs, /SENSOR_ALERT_MINUTES/);
-  assert.match(gs, /alertAllowed\('sensor:'/);
+  assert.match(gs, /SENSOR_SAMPLE_MINUTES/);
+  assert.match(gs, /SENSOR_REMIND_HOURS/);
+  assert.match(gs, /back in range/);
   assert.doesNotMatch(gs, /p\.subject/);
   assert.doesNotMatch(gs, /p\.body/);
+  const t0 = Date.parse("2026-11-12T12:00:00.000Z");
+  assert.equal(PM.sensorShouldStore(null, { value: 100, flag: "ok", now: t0 }, 15).store, true);
+  const steady = PM.sensorShouldStore({ value: 100, flag: "ok", at: t0 }, { value: 100.1, flag: "ok", now: t0 + 5 * 60000 }, 15);
+  assert.equal(steady.store, false);
+  assert.equal(PM.sensorShouldStore({ value: 100, flag: "ok", at: t0 }, { value: 110, flag: "ok", now: t0 + 60000 }, 15).reason, "change");
+  assert.equal(PM.sensorShouldStore({ value: 100, flag: "ok", at: t0 }, { value: 140, flag: "high", now: t0 + 60000 }, 15).reason, "out");
+  assert.equal(PM.sensorShouldStore({ value: 100, flag: "ok", at: t0 }, { value: 100, flag: "ok", now: t0 + 15 * 60000 }, 15).reason, "interval");
+  const out = PM.sensorAlertPlan({ flag: "ok", lastAlert: 0 }, { flag: "high" }, t0, 4);
+  assert.equal(out.send, "out");
+  const stuck = PM.sensorAlertPlan(out.state, { flag: "high" }, t0 + 60 * 60000, 4);
+  assert.equal(stuck.send, "");
+  const remind = PM.sensorAlertPlan(out.state, { flag: "high" }, t0 + 4 * 3600000, 4);
+  assert.equal(remind.send, "remind");
+  const back = PM.sensorAlertPlan(remind.state, { flag: "ok" }, t0 + 5 * 3600000, 4);
+  assert.equal(back.send, "back");
+  assert.equal(PM.sensorAlertPlan(back.state, { flag: "ok" }, t0 + 6 * 3600000, 4).send, "");
 });
 
 test("downtime counts an open clock and adds closed events to work-order hours", () => {
@@ -594,6 +624,9 @@ test("csv and the sheet escape formula text", () => {
   assert.match(csv, /'@sum/);
   assert.match(csv, /(?<![+'"])ok/);
   assert.doesNotMatch(csv, /(^|\n)=cmd/);
+  const nums = PM.toCsv([{ key: "n", label: "N", kind: "num" }, { key: "title", label: "Title" }], [{ n: -1, title: "ok" }]);
+  assert.match(nums, /(^|\r\n)-1,ok/);
+  assert.doesNotMatch(nums, /'-1/);
   const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert.match(gs, /function sheetSafe/);
   assert.match(gs, /sheetSafe\(text/);

@@ -192,7 +192,7 @@
       <p class="note">On Chrome for Android this uses the camera. Anywhere else, type the tag or paste the link the label opens.</p>
       <video id="scanVideo" playsinline autoplay muted style="width:100%;max-height:280px;background:#111;border-radius:6px"></video>
       <p id="scanMsg" class="note"></p>
-      <div class="f"><label for="scanTag">Or type the tag</label><input id="scanTag" type="text" autocomplete="on" placeholder="WL-1"></div>
+      <div class="f"><label for="scanTag">Or type the tag</label><input id="scanTag" data-code="1" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="WL-1"></div>
       <button class="btn primary" type="button" id="scanGo">Open machine</button></article>`;
     const msg = document.getElementById("scanMsg");
     const go = (text) => {
@@ -339,7 +339,7 @@
     const rows = ctx.state.failureCodes || [];
     ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><article class="panel"><h2>Failure codes</h2><p class="note">Techs pick one of these when they complete a work order. Add or retire a code here.</p>
       ${rows.length ? rows.map(c => `<div class="partline"><div><b>${ctx.esc(c.name)}</b>${c.active === "no" ? " · paused" : ""}</div><button class="btn small" type="button" data-floor="del-code" data-id="${ctx.esc(c.id)}">Remove</button></div>`).join("") : `<p class="note">Using the built-in list until you save your own: ${ctx.esc(names.join(", "))}.</p>`}
-      <div class="fitrow"><input id="codeName" type="text" placeholder="New code" autocomplete="on"><button class="btn" type="button" id="addCode">Add</button></div></article>`;
+      <div class="fitrow"><input id="codeName" data-code="1" type="text" placeholder="New code" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"><button class="btn" type="button" id="addCode">Add</button></div></article>`;
     ctx.view.querySelectorAll("[data-floor='del-code']").forEach(b => b.onclick = () => ctx.commit(PM().deleteFailureCode(ctx.state, b.dataset.id)));
     document.getElementById("addCode").onclick = () => ctx.commit(PM().saveFailureCode(ctx.state, { name: document.getElementById("codeName").value }));
   }

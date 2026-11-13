@@ -398,6 +398,13 @@ function readPhotoFile(p) {
   if (!id) return out({ ok: false, error: 'missing photo' });
   try {
     const file = DriveApp.getFileById(id);
+    const folderId = photoFolder().getId();
+    var allowed = false;
+    var parents = file.getParents();
+    while (parents.hasNext()) {
+      if (parents.next().getId() === folderId) allowed = true;
+    }
+    if (!allowed) return out({ ok: false, error: 'photo unavailable' });
     const blob = file.getBlob();
     const mime = blob.getContentType() || 'image/jpeg';
     return out({ ok: true, dataUrl: 'data:' + mime + ';base64,' + Utilities.base64Encode(blob.getBytes()), name: file.getName() });
@@ -508,28 +515,95 @@ function ingestSensorLocked(p) {
   let flag = 'ok';
   if (limit && limit.low !== '' && value < Number(limit.low)) flag = 'low';
   if (limit && limit.high !== '' && value > Number(limit.high)) flag = 'high';
-  const id = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
   const day = now.slice(0, 10);
-  writeDoc('sensorLogs', id, {
-    id: id, assetId: asset.id, assetTag: asset.tag, name: name, unit: (limit && limit.unit) || String(p.unit || ''),
-    value: value, type: type, date: String(p.date || day).slice(0, 10), source: String(p.source || 'esp32'),
-    flag: flag, note: String(p.note || '').slice(0, 500), createdAt: now
-  });
-  if (meterLike && String(asset.metered) === 'yes') {
-    asset.meter = value;
-    asset.updatedAt = now;
-    writeDoc('assets', asset.id, asset);
-    const rid = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
-    writeDoc('readings', rid, { id: rid, assetId: asset.id, workOrderId: '', reading: value, techId: '', date: day, notes: 'Sensor ' + name, createdAt: now });
-  }
-  if (flag !== 'ok' && alertAllowed('sensor:' + asset.id + ':' + type)) {
-    const to = alertAddress();
-    if (to) {
-      try { MailApp.sendEmail(to, asset.tag + ' reading out of range', asset.tag + ' ' + name + ' read ' + value + ' (' + flag + ').'); } catch (mailErr) {}
+  const last = lastSensorSample(asset.id, type);
+  const keep = sensorKeepSample(last, { value: value, flag: flag, now: nowMs });
+  var id = '';
+  if (keep.store) {
+    id = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
+    writeDoc('sensorLogs', id, {
+      id: id, assetId: asset.id, assetTag: asset.tag, name: name, unit: (limit && limit.unit) || String(p.unit || ''),
+      value: value, type: type, date: String(p.date || day).slice(0, 10), source: String(p.source || 'esp32'),
+      flag: flag, note: String(p.note || '').slice(0, 500), createdAt: now
+    });
+    if (meterLike && String(asset.metered) === 'yes') {
+      asset.meter = value;
+      asset.updatedAt = now;
+      writeDoc('assets', asset.id, asset);
+      const rid = Utilities.getUuid().replace(/-/g, '').slice(0, 20);
+      writeDoc('readings', rid, { id: rid, assetId: asset.id, workOrderId: '', reading: value, techId: '', date: day, notes: 'Sensor ' + name, createdAt: now });
     }
   }
-  return out({ ok: true, id: id, flag: flag, asset: asset.tag });
+  const plan = sensorMailPlan(asset.id, type, flag, nowMs);
+  if (plan.send) {
+    const to = alertAddress();
+    if (to) {
+      var subject = asset.tag + ' reading out of range';
+      var body = asset.tag + ' ' + name + ' read ' + value + ' (' + flag + ').';
+      if (plan.send === 'remind') { subject = asset.tag + ' still out of range'; body = asset.tag + ' ' + name + ' is still out of range. It read ' + value + ' (' + flag + ').'; }
+      if (plan.send === 'back') { subject = asset.tag + ' back in range'; body = asset.tag + ' ' + name + ' is back in range. It read ' + value + '.'; }
+      try { MailApp.sendEmail(to, subject, body); } catch (mailErr) {}
+    }
+  }
+  return out({ ok: true, id: id, stored: keep.store, flag: flag, alert: plan.send || '', asset: asset.tag });
+}
+
+function sensorSampleMinutes() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('SENSOR_SAMPLE_MINUTES') || '15');
+  if (!isFinite(n) || n <= 0) n = 15;
+  return n;
+}
+function sensorRemindHours() {
+  var n = Number(PropertiesService.getScriptProperties().getProperty('SENSOR_REMIND_HOURS') || '4');
+  if (!isFinite(n) || n <= 0) n = 4;
+  return n;
+}
+function lastSensorSample(assetId, type) {
+  var rows = readAll('sensorLogs');
+  var best = null;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (String(r.assetId) !== String(assetId) || String(r.type) !== String(type)) continue;
+    if (!best || String(r.createdAt) > String(best.createdAt)) best = r;
+  }
+  return best;
+}
+/* Same rules as sensorShouldStore in js/logic.js. */
+function sensorKeepSample(last, sample) {
+  var mins = sensorSampleMinutes();
+  var flag = sample.flag || 'ok';
+  if (!last) return { store: true, reason: 'first' };
+  var prevFlag = last.flag || 'ok';
+  if (flag !== 'ok') return { store: true, reason: 'out' };
+  if (prevFlag !== 'ok') return { store: true, reason: 'back' };
+  var prev = Number(last.value);
+  var next = Number(sample.value);
+  var span = Math.max(0.5, Math.abs(prev) * 0.01);
+  if (isFinite(prev) && isFinite(next) && Math.abs(next - prev) >= span) return { store: true, reason: 'change' };
+  var at = Date.parse(last.createdAt || '');
+  if (!isFinite(at) || sample.now - at >= mins * 60000) return { store: true, reason: 'interval' };
+  return { store: false, reason: 'steady' };
+}
+/* Same rules as sensorAlertPlan in js/logic.js. */
+function sensorMailPlan(assetId, type, flag, now) {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'sensorState:' + assetId + ':' + type;
+  var prev = { flag: 'ok', lastAlert: 0 };
+  try { prev = JSON.parse(props.getProperty(key) || '') || prev; } catch (err) {}
+  var hours = sensorRemindHours();
+  var was = prev.flag || 'ok';
+  var lastAlert = Number(prev.lastAlert) || 0;
+  var send = '';
+  var state = { flag: 'ok', lastAlert: 0 };
+  if (flag !== 'ok' && was === 'ok') { send = 'out'; state = { flag: flag, lastAlert: now }; }
+  else if (flag !== 'ok') {
+    if (now - lastAlert >= hours * 3600000) { send = 'remind'; state = { flag: flag, lastAlert: now }; }
+    else state = { flag: flag, lastAlert: lastAlert };
+  } else if (was !== 'ok') { send = 'back'; state = { flag: 'ok', lastAlert: 0 }; }
+  props.setProperty(key, JSON.stringify(state));
+  return { send: send, state: state };
 }
 
 function digestText() {
