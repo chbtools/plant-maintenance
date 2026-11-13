@@ -18,7 +18,8 @@
     ["schedule", "Weekly schedule", "Put PMs and work orders on a tech and a day"],
     ["sensors", "Sensor tie-in", "ESP32 or a hand entry can log a reading and raise a flag"],
     ["kits", "Parts kits", "The PM parts list is reserved when its work order opens"],
-    ["monthly", "Monthly one-pager", "Uptime, PM compliance, cost by area, top offenders"]
+    ["monthly", "Monthly one-pager", "Uptime, PM compliance, cost by area, top offenders"],
+    ["voicewo", "Voice work order", "Say a job out loud and confirm with save"]
   ];
 
   function list(state, name) {
@@ -76,7 +77,7 @@
       const open = list(state, "downtimeEvents").find(e => e.assetId === a.id && e.open === "yes");
       return { id: a.id, tag: a.tag, name: a.name, since: open ? open.startedAt : "" };
     });
-    const late = (state.workOrders || []).filter(w => PM.isOverdueWo(w, day)).map(w => ({ id: w.id, woNumber: w.woNumber, title: w.title, tag: w.assetTag, dueDate: w.dueDate }));
+    const late = (state.workOrders || []).filter(w => PM.isOverdueWo(w, day)).map(w => ({ id: w.id, woNumber: w.woNumber, title: w.title, tag: w.assetTag || (w.location ? w.location : (PM.isGeneral(w) ? "No machine" : "")), dueDate: w.dueDate }));
     const low = (state.parts || []).filter(p => PM.num(p.onHand) <= PM.num(p.reorderPoint)).map(p => ({ id: p.id, sku: p.sku, name: p.name, onHand: PM.num(p.onHand), reorderPoint: PM.num(p.reorderPoint) }));
     const expiring = warrantyAlerts(state, day);
     return { day, pms, down, late, low, expiring };
@@ -415,14 +416,27 @@
   function repeatOffenders(state, day, span) {
     const days = span === 30 ? 30 : 90;
     const from = PM.addDays(day, -(days - 1));
-    return (state.assets || []).map(a => {
+    const rows = (state.assets || []).map(a => {
       const wos = (state.workOrders || []).filter(w => w.assetId === a.id && w.status !== "cancelled" && w.status !== "draft" && PM.inRange(w.openedDate, from, day));
       const spend = PM.spendBetween(state, from, day, a.id);
       const eventMins = downtimeMinutes(state, a.id, from, day);
       const woHours = wos.reduce((n, w) => n + PM.num(w.downtimeHours), 0);
       const downtime = eventMins ? Math.round(eventMins / 60 * 10) / 10 : woHours;
       return { id: a.id, tag: a.tag, name: a.name, area: a.area || "", woCount: wos.length, downtime, cost: spend.total };
-    }).filter(a => a.woCount || a.downtime || a.cost).sort((a, b) => b.cost - a.cost || b.downtime - a.downtime || b.woCount - a.woCount);
+    }).filter(a => a.woCount || a.downtime || a.cost);
+    const groups = {};
+    (state.workOrders || []).forEach(w => {
+      if (w.assetId || !PM.isGeneral(w)) return;
+      if (w.status === "cancelled" || w.status === "draft") return;
+      if (!PM.inRange(w.openedDate, from, day)) return;
+      const key = w.location || "General";
+      if (!groups[key]) groups[key] = { id: "", tag: "No machine", name: key, area: key, woCount: 0, downtime: 0, cost: 0 };
+      const c = PM.woCosts(state, w.id);
+      groups[key].woCount++;
+      groups[key].downtime = PM.round2(groups[key].downtime + PM.num(w.downtimeHours));
+      groups[key].cost = PM.round2(groups[key].cost + c.total);
+    });
+    return rows.concat(Object.values(groups)).sort((a, b) => b.cost - a.cost || b.downtime - a.downtime || b.woCount - a.woCount);
   }
   function monthlyOnePager(state, day) {
     day = day || PM.today();
@@ -436,6 +450,17 @@
       byArea[key].cost = PM.round2(byArea[key].cost + spend.total);
       byArea[key].downtime = PM.round2(byArea[key].downtime + spend.downtime);
       byArea[key].wos += spend.woCount;
+    });
+    (state.workOrders || []).forEach(w => {
+      if (w.assetId || !PM.isGeneral(w)) return;
+      if (w.status === "cancelled" || w.status === "draft") return;
+      if (!PM.inRange(w.openedDate, from, day)) return;
+      const key = w.location ? ("No machine · " + w.location) : "No machine · General";
+      if (!byArea[key]) byArea[key] = { area: key, cost: 0, downtime: 0, wos: 0 };
+      const c = PM.woCosts(state, w.id);
+      byArea[key].cost = PM.round2(byArea[key].cost + c.total);
+      byArea[key].downtime = PM.round2(byArea[key].downtime + PM.num(w.downtimeHours));
+      byArea[key].wos++;
     });
     const areas = Object.values(byArea).filter(a => a.cost || a.wos || a.downtime).sort((a, b) => b.cost - a.cost);
     const active = (state.pmTasks || []).filter(t => t.active !== "no");

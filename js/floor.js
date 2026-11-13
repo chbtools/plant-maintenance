@@ -158,10 +158,15 @@
       <div class="cards">${cards.map(([, href, title, note]) => `<a class="card" href="${href}"><span class="title">${ctx.esc(title)}</span><span class="note">${ctx.esc(note)}</span></a>`).join("")}
       <a class="card" href="#settings"><span class="title">Settings</span><span class="note">Hide modules, digest email, alert email.</span></a></div>`;
   }
+  function voiceBtn(assetId) {
+    const SR = globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition;
+    if (!SR || !shown("voicewo")) return "";
+    return `<button class="btn primary voice-wo" type="button" data-action="voice-wo" data-id="${assetId || ""}">Voice work order</button>`;
+  }
   function today(ctx) {
     const b = PM().todayBrief(ctx.state, PM().today());
     const row = (href, html) => `<a class="list-link" href="${href}">${html}</a>`;
-    ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><article class="panel"><h2>Today</h2>
+    ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p>${voiceBtn("")}<article class="panel"><h2>Today</h2>
       <h3>Down</h3>${b.down.length ? b.down.map(a => row("#asset/" + ctx.esc(a.id), `<span><b>${ctx.esc(a.tag)}</b> ${ctx.esc(a.name)}</span><span>${a.since ? "since " + ctx.esc(a.since.slice(11, 16)) : ""}</span>`)).join("") : `<p class="note">Nothing is down.</p>`}
       <h3>Overdue or due PMs</h3>${b.pms.length ? b.pms.map(p => row("#pm", `<span>${ctx.esc(p.tag)} ${ctx.esc(p.name)}</span><span>${ctx.esc(p.info.status)}</span>`)).join("") : `<p class="note">None.</p>`}
       <h3>Late work orders</h3>${b.late.length ? b.late.map(w => row("#wo/" + ctx.esc(w.id), `<span>${ctx.esc(w.woNumber)} ${ctx.esc(w.title)}</span><span>${ctx.esc(w.dueDate)}</span>`)).join("") : `<p class="note">None late.</p>`}
@@ -174,7 +179,7 @@
       <p class="note">On Chrome for Android this uses the camera. Anywhere else, type the tag or paste the link the label opens.</p>
       <video id="scanVideo" playsinline autoplay muted style="width:100%;max-height:280px;background:#111;border-radius:6px"></video>
       <p id="scanMsg" class="note"></p>
-      <div class="f"><label for="scanTag">Or type the tag</label><input id="scanTag" type="text" autocomplete="off" placeholder="WL-1"></div>
+      <div class="f"><label for="scanTag">Or type the tag</label><input id="scanTag" type="text" autocomplete="on" placeholder="WL-1"></div>
       <button class="btn primary" type="button" id="scanGo">Open machine</button></article>`;
     const msg = document.getElementById("scanMsg");
     const go = (text) => {
@@ -247,7 +252,7 @@
       <div class="f"><label for="inspAsset">Machine</label>${ctx.sel("inspAsset", template.assetId, ctx.assetChoices())}</div>
       ${items.map(item => `<div class="f"><span class="lbl">${ctx.esc(item.text)}</span><div class="seg" data-item="${ctx.esc(item.id)}" data-text="${ctx.esc(item.text)}">
         <button type="button" data-res="pass" aria-pressed="true">Pass</button><button type="button" data-res="fail">Fail</button><button type="button" data-res="na">N/A</button>
-      </div><input type="text" data-note="${ctx.esc(item.id)}" placeholder="Note if it failed" autocomplete="off"></div>`).join("")}
+      </div><input type="text" data-note="${ctx.esc(item.id)}" placeholder="Note if it failed" autocomplete="on"></div>`).join("")}
       <button class="btn primary" type="button" id="inspSave">Save inspection</button><div class="err" id="formErr"></div></article>`;
     ctx.view.querySelectorAll(".seg").forEach(seg => seg.querySelectorAll("button").forEach(b => b.onclick = () => {
       seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false"));
@@ -286,7 +291,7 @@
     ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><div class="toolbar"><button class="chip" type="button" id="span30" aria-pressed="${span === 30}">30 days</button><button class="chip" type="button" id="span90" aria-pressed="${span === 90}">90 days</button>
       <button class="btn" type="button" id="reorderCsv">Reorder CSV</button></div>
       <article class="panel"><h2>Repeat offenders</h2><div class="tbl-wrap"><table><thead><tr><th>Asset</th><th class="num">Jobs</th><th class="num">Downtime h</th><th class="num">Cost</th></tr></thead><tbody>
-      ${rows.map(r => `<tr><td><a href="#asset/${ctx.esc(r.id)}">${ctx.esc(r.tag)}</a> ${ctx.esc(r.name)}</td><td class="num">${r.woCount}</td><td class="num">${r.downtime}</td><td class="num">${ctx.esc(P.money(r.cost))}</td></tr>`).join("") || `<tr><td colspan="4">Nothing in this window.</td></tr>`}
+      ${rows.map(r => `<tr><td>${r.id ? `<a href="#asset/${ctx.esc(r.id)}">${ctx.esc(r.tag)}</a>` : ctx.esc(r.tag)} ${ctx.esc(r.name)}</td><td class="num">${r.woCount}</td><td class="num">${r.downtime}</td><td class="num">${ctx.esc(P.money(r.cost))}</td></tr>`).join("") || `<tr><td colspan="4">Nothing in this window.</td></tr>`}
       </tbody></table></div></article>`;
     document.getElementById("span30").onclick = () => { ctx.ui.span = 30; offenders(ctx); };
     document.getElementById("span90").onclick = () => { ctx.ui.span = 90; offenders(ctx); };
@@ -321,13 +326,15 @@
     const rows = ctx.state.failureCodes || [];
     ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><article class="panel"><h2>Failure codes</h2><p class="note">Techs pick one of these when they complete a work order. Add or retire a code here.</p>
       ${rows.length ? rows.map(c => `<div class="partline"><div><b>${ctx.esc(c.name)}</b>${c.active === "no" ? " · paused" : ""}</div><button class="btn small" type="button" data-floor="del-code" data-id="${ctx.esc(c.id)}">Remove</button></div>`).join("") : `<p class="note">Using the built-in list until you save your own: ${ctx.esc(names.join(", "))}.</p>`}
-      <div class="fitrow"><input id="codeName" type="text" placeholder="New code" autocomplete="off"><button class="btn" type="button" id="addCode">Add</button></div></article>`;
+      <div class="fitrow"><input id="codeName" type="text" placeholder="New code" autocomplete="on"><button class="btn" type="button" id="addCode">Add</button></div></article>`;
     ctx.view.querySelectorAll("[data-floor='del-code']").forEach(b => b.onclick = () => ctx.commit(PM().deleteFailureCode(ctx.state, b.dataset.id)));
     document.getElementById("addCode").onclick = () => ctx.commit(PM().saveFailureCode(ctx.state, { name: document.getElementById("codeName").value }));
   }
   function settings(ctx) {
     const s = PM().plantSettings(ctx.state);
+    const speechHere = !!(globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition);
     ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><article class="panel"><h2>What to show</h2><p class="note">Turn off a module you don't want on the menus. Nothing is deleted.</p>
+      ${speechHere ? "" : `<p class="note">This browser has no speech recognition, so Voice work order and the Mic buttons on text boxes stay hidden. Chrome and Edge have it. You can still type every box, and Wispr Flow still types into whichever box is selected.</p>`}
       <div class="checks">${PM().MODULES.map(([id, label, note]) => `<label><input type="checkbox" data-mod="${ctx.esc(id)}" ${shown(id) ? "checked" : ""}> ${ctx.esc(label)} <span class="note">${ctx.esc(note)}</span></label>`).join("")}</div></article>
       <article class="panel"><h2>Email</h2><p class="note">The morning digest and the machine-down alert use these addresses. They send only after you redeploy Code.gs and run installDigestTrigger once (see the README). The plant code is not in the email.</p>
       <div class="f"><label for="digestEmail">Digest email</label><input id="digestEmail" type="email" value="${ctx.esc(s.digestEmail || "")}"></div>

@@ -423,3 +423,89 @@ test("floor modules: down clock, failure code, inspection, sensor, kit, report",
   assert.equal(qr[6][6], 1);
   assert.equal(qr[0][qr.length - 1], 1);
 });
+
+test("a general plant task does not need a machine", () => {
+  const s = sample();
+  const lights = s.workOrders.find(w => w.title === "Replace the light over the break room door");
+  assert.ok(lights);
+  assert.equal(lights.assetId, "");
+  assert.equal(lights.type, "General / plant task");
+  assert.equal(lights.location, "Break room");
+  assert.equal(PM.isGeneral(lights), true);
+  const made = PM.saveWo(s, {
+    type: "General / plant task", assetId: "", location: "Dock", status: "open",
+    title: "Sweep the dock", description: "Sweep the dock before the truck.", priority: "Low",
+    openedDate: DAY
+  });
+  assert.equal(made.ok, true, made.message);
+  const wo = made.state.workOrders.find(w => w.id === made.woId);
+  assert.equal(wo.assetId, "");
+  assert.equal(wo.assetTag, "");
+  const hours = PM.saveTime(made.state, { workOrderId: wo.id, techId: s.techs[0].id, hours: 0.5, date: DAY });
+  assert.equal(hours.ok, true, hours.message);
+  const report = PM.buildReports(made.state, { from: "2026-11-01", to: DAY, today: DAY }).find(r => r.id === "work");
+  const row = report.rows.find(r => r.title === "Sweep the dock");
+  assert.equal(row.assetTag, "No machine");
+  assert.match(row.area, /Dock|No machine/);
+  const month = PM.monthlyOnePager(made.state, DAY);
+  assert.ok(month.areas.some(a => /No machine/.test(a.area) && a.wos >= 1));
+  const repair = PM.saveWo(s, { title: "Needs a machine", assetId: "", status: "open", type: "Repair" });
+  assert.equal(repair.ok, false);
+});
+
+test("dictation does not rebuild a box that is focused or composing", () => {
+  assert.equal(PM.dictationAllowsRender({ focused: false, composing: false }), true);
+  assert.equal(PM.dictationAllowsRender({ focused: true, composing: false }), false);
+  assert.equal(PM.dictationAllowsRender({ focused: false, composing: true }), false);
+});
+
+test("voice work order parses several phrasings, including a general task", () => {
+  const s = sample();
+  const today = "2026-11-12";
+  const spoken = PM.parseVoiceWorkOrder(
+    "Work order, Truss air compressor, air leak on the drain valve, priority high, assign to Randy",
+    s, { today }
+  );
+  assert.equal(spoken.assetTag, "AC-2");
+  assert.equal(spoken.type, "Repair");
+  assert.equal(spoken.priority, "High");
+  assert.equal(spoken.assignedName, "Randy Johnson");
+  assert.match(spoken.description, /air leak on the drain valve/i);
+  const saved = PM.saveWo(s, {
+    type: spoken.type, assetId: spoken.assetId, location: spoken.location,
+    title: spoken.title, description: spoken.description, priority: spoken.priority,
+    assignedTo: spoken.assignedTo, status: "open", source: "voice",
+    voiceTranscript: spoken.transcript, openedDate: today
+  });
+  assert.equal(saved.ok, true, saved.message);
+  const wo = saved.state.workOrders.find(w => w.id === saved.woId);
+  assert.equal(wo.assetTag, "AC-2");
+  assert.equal(wo.priority, "High");
+  assert.equal(wo.assignedName, "Randy Johnson");
+  assert.equal(wo.source, "voice");
+
+  const general = PM.parseVoiceWorkOrder(
+    "General task, replace the light over the break room door, location break room",
+    s, { today }
+  );
+  assert.equal(general.type, "General / plant task");
+  assert.equal(general.assetId, "");
+  assert.equal(general.assetTag, "");
+  assert.match(general.location, /break room/i);
+  assert.match(general.description, /replace the light/i);
+  assert.equal(PM.voiceCommand("save"), "save");
+  assert.equal(PM.voiceCommand("yes"), "save");
+  assert.equal(PM.voiceCommand("cancel"), "cancel");
+  const changed = PM.applyVoiceCommand(spoken, "change priority to low", s, { today });
+  assert.equal(changed.command, "change");
+  assert.equal(changed.parsed.priority, "Low");
+  assert.equal(changed.parsed.assetTag, "AC-2");
+
+  const friday = PM.parseVoiceWorkOrder("Work order, panel saw, blade is dull, due Friday", s, { today });
+  assert.equal(friday.assetTag, "PS-12");
+  assert.equal(friday.dueDate, "2026-11-13");
+  const prefilled = PM.parseVoiceWorkOrder("Work order, hose is wet, due tomorrow", s, { today, assetId: s.assets.find(a => a.tag === "WL-1").id });
+  assert.equal(prefilled.assetTag, "WL-1");
+  assert.equal(prefilled.dueDate, "2026-11-13");
+  assert.match(PM.voiceSummary(general), /no machine/i);
+});

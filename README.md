@@ -56,9 +56,15 @@ Save. You get a **draft** work order to finish later (pick the machine, assign s
 
 A full work order works the same way. The title and the "what's wrong" box are normal text fields. Put the cursor in the one you want and dictate or type. If you only fill the big box, the first line becomes the title.
 
+Every text box, search box, and note in the app works the same way. The list under a search box updates without rebuilding the box you are typing in, so the phone keyboard mic and Wispr Flow are not cut off mid-word. Each box has a small **Mic** button when the browser has speech recognition. Chrome and Edge do. If the browser does not, the button is hidden and Settings says so.
+
 ### Work orders
 
 Tap **+ Work order**. Pick the machine, assign a tech, and set the status: draft, open, in progress, waiting on parts, waiting on approval, on hold, or complete.
+
+**General / plant task** is for work that is not on a machine: a light, a door, a cleanup. Leave equipment blank. Type a location if you have one (Break room, Yard). The list shows **No machine**, plus that location. Machine-down and inspections still need a machine.
+
+**Voice work order** is the big button on Home, on Today, on the work-order list, and on a machine you opened from its QR label (that machine is already filled in). The browser will not turn the mic on by itself, so the first tap is required. After that, talk normally, for example: "Work order, Truss air compressor, air leak on the drain valve, priority high, assign to Randy" or "General task, replace the light over the break room door, location break room." The app reads a summary back and shows it. Say **save** or **yes** to create it (same save as the form, including the offline queue), **cancel** to drop it, or **change** and then the correction. Turn the button off under **Floor → Settings**, same as the other modules.
 
 **Complete** asks for the work performed, downtime hours, and the meter if the machine has one.
 
@@ -195,6 +201,10 @@ The script accepts `action: "sensor"` with the plant code, an asset tag, a name,
 ### Parts kits
 
 The parts on a PM task are the kit. When you **Make work order**, those parts are reserved to that job and pulled from stock (the on-hand count drops, and a reservation row says `issued`). **Reorder CSV** is the shopping list.
+
+### Voice work order
+
+Turned on with the other modules. One tap, then hands-free. Hidden when the browser has no speech recognition. See **Work orders** above.
 
 ### Monthly one-pager
 

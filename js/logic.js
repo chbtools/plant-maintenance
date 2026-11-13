@@ -13,7 +13,8 @@
     waiting_approval: "Waiting on approval", on_hold: "On hold", complete: "Complete", cancelled: "Cancelled"
   };
   const PRIORITIES = ["Low", "Normal", "High", "Urgent"];
-  const WO_TYPES = ["Repair", "PM", "Inspection", "Project"];
+  const WO_TYPES = ["Repair", "PM", "Inspection", "Project", "General / plant task"];
+  const GENERAL_TYPE = "General / plant task";
   const ASSET_STATUSES = ["Running", "Down", "Idle", "Out of service"];
   const METER_TYPES = ["Hours", "Cycles", "Miles"];
   const BASES = ["calendar", "meter", "both"];
@@ -39,7 +40,7 @@
     assets: ["id", "tag", "name", "area", "type", "make", "model", "year", "serial", "status", "metered", "meterType", "meter", "notes", "createdAt", "updatedAt"],
     levels: ["id", "assetId", "name", "basis", "everyDays", "everyMeter", "active", "notes", "createdAt"],
     pmTasks: ["id", "assetId", "levelId", "name", "instructions", "partsJson", "active", "lastCompletedAt", "lastMeter", "lastWoId", "createdAt"],
-    workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "failureCode", "rootCause", "createdAt", "updatedAt"],
+    workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "failureCode", "rootCause", "location", "createdAt", "updatedAt"],
     parts: ["id", "sku", "name", "description", "bin", "onHand", "reorderPoint", "reorderQty", "unitCost", "vendor", "notes", "createdAt", "updatedAt"],
     fits: ["id", "partId", "assetId", "notes", "addedBy", "createdAt"],
     uses: ["id", "workOrderId", "partId", "assetId", "partSku", "partName", "qty", "unitCost", "extended", "techId", "createdAt"],
@@ -624,11 +625,12 @@
       const title = String(f.title || "").trim();
       if (!title) return fail("Give the work order a short title.");
       const status = STATUSES.includes(f.status) ? f.status : ((existing && existing.status) || "open");
+      const type = WO_TYPES.includes(f.type) ? f.type : ((existing && existing.type) || "Repair");
       const assetId = Object.prototype.hasOwnProperty.call(f, "assetId") ? f.assetId : ((existing && existing.assetId) || "");
       const asset = assetId ? assetById(state, assetId) : null;
       if (assetId && !asset) return fail("That equipment was not found.");
-      if (!asset && status !== "draft") return fail("Pick the equipment. Drafts can wait until you know which machine.");
-      const type = WO_TYPES.includes(f.type) ? f.type : ((existing && existing.type) || "Repair");
+      const general = type === GENERAL_TYPE;
+      if (!asset && status !== "draft" && !general) return fail("Pick the equipment. Drafts can wait until you know which machine. A General / plant task can stay without one.");
       const priority = PRIORITIES.includes(f.priority) ? f.priority : ((existing && existing.priority) || "Normal");
       const source = SOURCES.includes(f.source) ? f.source : ((existing && existing.source) || "typed");
       const now = stamp(f);
@@ -637,8 +639,9 @@
       if (f.assignedTo && !tech) return fail("That tech is not on the team.");
       const wo = existing || { id: f.id || uid(), woNumber: nextWoNumber(state), createdAt: now };
       wo.assetId = asset ? asset.id : "";
-      wo.assetTag = asset ? asset.tag : (existing && existing.assetTag) || "";
-      wo.assetName = asset ? asset.name : (existing && existing.assetName) || "";
+      wo.assetTag = asset ? asset.tag : "";
+      wo.assetName = asset ? asset.name : "";
+      wo.location = f.location != null ? String(f.location).trim() : (wo.location || "");
       wo.title = title;
       wo.description = String(f.description == null ? wo.description || "" : f.description);
       wo.type = type;
@@ -679,7 +682,7 @@
       if (!wo) return fail("That work order was not found.");
       const status = f.status;
       if (!STATUSES.includes(status)) return fail("Unknown status.");
-      if (status !== "draft" && !wo.assetId) return fail("Pick the equipment before moving this out of draft.");
+      if (status !== "draft" && !wo.assetId && wo.type !== GENERAL_TYPE) return fail("Pick the equipment before moving this out of draft. A General / plant task can stay without one.");
       const now = stamp(f);
       const day = f.date || dayOf(now);
       if (status === "cancelled" && wo.status !== "cancelled") {
@@ -790,20 +793,21 @@
       if (hours > 24) return fail("That's more than a day. Log each day on its own line.");
       const wo = f.workOrderId ? woById(state, f.workOrderId) : null;
       if (f.workOrderId && !wo) return fail("That work order was not found.");
-      const asset = wo ? assetById(state, wo.assetId) : assetById(state, f.assetId);
-      if (!asset) return fail("Pick the equipment this time goes against.");
+      const asset = wo && wo.assetId ? assetById(state, wo.assetId) : (!wo ? assetById(state, f.assetId) : null);
+      const plantTask = wo && !wo.assetId && wo.type === GENERAL_TYPE;
+      if (!asset && !plantTask) return fail("Pick the equipment this time goes against.");
       const existing = f.id && state.timeLogs.find(t => t.id === f.id);
       const now = stamp(f);
       const rate = f.rate != null && f.rate !== "" ? round2(f.rate) : round2(tech.hourlyRate);
       const row = {
-        id: (existing && existing.id) || uid(), workOrderId: wo ? wo.id : "", assetId: asset.id, techId: tech.id, techName: tech.name,
+        id: (existing && existing.id) || uid(), workOrderId: wo ? wo.id : "", assetId: asset ? asset.id : "", techId: tech.id, techName: tech.name,
         date: f.date || dayOf(now), hours, rate, notes: String(f.notes || "").trim(), createdAt: (existing && existing.createdAt) || now
       };
       if (!row.date) return fail("Enter the date.");
       if (existing) Object.assign(existing, row); else state.timeLogs.push(row);
       put(ops, "timeLogs", existing || row);
       if (wo) { wo.updatedAt = now; put(ops, "workOrders", wo); }
-      return { message: "Logged " + hours + " h for " + tech.name + " on " + asset.tag + "." };
+      return { message: "Logged " + hours + " h for " + tech.name + " on " + (asset ? asset.tag : "a plant task") + "." };
     });
   }
   function deleteTime(input, id) {
@@ -1004,8 +1008,8 @@
       const c = woCosts(state, w.id);
       const task = w.pmTaskId && taskById(state, w.pmTaskId);
       return {
-        woNumber: w.woNumber, openedDate: w.openedDate, completedDate: w.completedDate, assetTag: w.assetTag, assetName: w.assetName,
-        area: (assetById(state, w.assetId) || {}).area || "", type: w.type, status: STATUS_LABEL[w.status] || w.status, priority: w.priority,
+        woNumber: w.woNumber, openedDate: w.openedDate, completedDate: w.completedDate, assetTag: w.assetTag || (w.type === GENERAL_TYPE ? "No machine" : ""), assetName: w.assetName || (w.location || ""),
+        area: (assetById(state, w.assetId) || {}).area || w.location || (w.type === GENERAL_TYPE ? "No machine · General" : ""), type: w.type, status: STATUS_LABEL[w.status] || w.status, priority: w.priority,
         assigned: whoName(state, w), title: w.title, dueDate: w.dueDate, meterAt: hasNum(w.meterAt) ? num(w.meterAt) : "",
         downtimeHours: num(w.downtimeHours), laborHours: c.laborHours, laborCost: c.labor, partsCost: c.parts, otherCost: c.other, totalCost: c.total,
         partsUsed: partsUsedText(state, w.id), techs: techsOnWo(state, w.id), source: w.source, pmTask: task ? task.name : "",
@@ -1102,6 +1106,140 @@
   function sortWork(list, day) {
     return list.slice().sort((a, b) => (isOverdueWo(b, day) - isOverdueWo(a, day)) || (priorityRank(a.priority) - priorityRank(b.priority)) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String(a.openedDate || "").localeCompare(String(b.openedDate || "")));
   }
+  const isGeneral = w => !!(w && w.type === GENERAL_TYPE);
+  /* Search boxes must not be rebuilt while the keyboard mic or Wispr is mid-word. */
+  function dictationAllowsRender(flags) {
+    flags = flags || {};
+    return !flags.focused && !flags.composing;
+  }
+  function wordsOf(s) {
+    return String(s || "").toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+  }
+  function fuzzyAsset(assets, text) {
+    const spoken = String(text || "").toLowerCase();
+    let best = null, bestScore = 0;
+    for (const a of assets || []) {
+      let score = 0;
+      const tag = String(a.tag || "").toLowerCase();
+      if (tag && spoken.includes(tag)) score += 6;
+      for (const w of wordsOf(a.name)) if (spoken.includes(w)) score += 2;
+      for (const w of wordsOf(a.area)) if (spoken.includes(w)) score += 1;
+      if (score > bestScore) { best = a; bestScore = score; }
+    }
+    return bestScore >= 2 ? best : null;
+  }
+  function fuzzyTech(techs, spoken) {
+    const q = String(spoken || "").toLowerCase().trim();
+    if (!q) return null;
+    let best = null, bestScore = 0;
+    for (const t of techs || []) {
+      const name = String(t.name || "").toLowerCase();
+      if (!name) continue;
+      let score = 0;
+      if (name === q) score = 10;
+      else if (name.startsWith(q + " ") || name.split(" ")[0] === q) score = 6;
+      else if (name.includes(q)) score = 4;
+      else {
+        const hits = wordsOf(q).filter(w => name.includes(w)).length;
+        if (hits) score = hits;
+      }
+      if (score > bestScore) { best = t; bestScore = score; }
+    }
+    return bestScore >= 1 ? best : null;
+  }
+  function lastMatch(text, re) {
+    let m, last = null;
+    const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+    while ((m = r.exec(text))) last = m;
+    return last;
+  }
+  function tidyPhrase(s) {
+    return String(s || "").replace(/[.,]+$/g, "").replace(/\s+/g, " ").trim();
+  }
+  function parseVoiceWorkOrder(transcript, state, opts) {
+    opts = opts || {};
+    state = state || emptyState();
+    const text = String(transcript || "").replace(/\s+/g, " ").trim();
+    const lower = text.toLowerCase();
+    let type = "Repair";
+    if (/\bgeneral\s*\/\s*plant\b|\bgeneral\s+(?:plant\s+)?task\b|\bplant task\b|\bgeneral plant\b/.test(lower)) type = GENERAL_TYPE;
+    else if (/\binspection\b/.test(lower)) type = "Inspection";
+    else if (/\bpreventive\b|\bpm\b/.test(lower)) type = "PM";
+    else if (/\bproject\b/.test(lower)) type = "Project";
+    let priority = "Normal";
+    const pri = lastMatch(lower, /\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/i);
+    if (pri) priority = pri[1].charAt(0).toUpperCase() + pri[1].slice(1);
+    const todayIso = opts.today || today();
+    let dueDate = "";
+    const dueWord = lastMatch(lower, /\b(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+    if (dueWord) {
+      const word = dueWord[1].toLowerCase();
+      if (word === "today") dueDate = todayIso;
+      else if (word === "tomorrow") dueDate = addDays(todayIso, 1);
+      else {
+        const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+        const ms = parseDay(todayIso);
+        const cur = ms == null ? 0 : new Date(ms).getUTCDay();
+        const target = names.indexOf(word);
+        dueDate = addDays(todayIso, (target - cur + 7) % 7);
+      }
+    }
+    let assignedTo = "", assignedName = "";
+    const who = lastMatch(lower, /\bassign(?:ed)?\s+to\s+([a-z][a-z .'-]{1,40})/i);
+    if (who) {
+      const tech = fuzzyTech(state.techs, tidyPhrase(who[1]).split(/\s+/).filter(w => !/^(priority|location|area|due|today|tomorrow|high|low|urgent|normal)$/.test(w)).slice(0, 3).join(" "));
+      if (tech) { assignedTo = tech.id; assignedName = tech.name; }
+    }
+    let location = "";
+    const loc = lastMatch(lower, /\b(?:location|area)\s+(?:is\s+|to\s+)?([a-z0-9][a-z0-9 .'-]{0,60})/i);
+    if (loc) location = tidyPhrase(loc[1]).split(/\s+/).filter(w => !/^(priority|assign|assigned|due|today|tomorrow|high|low|urgent|normal)$/.test(w)).slice(0, 6).join(" ");
+    let asset = null;
+    if (type !== GENERAL_TYPE) {
+      asset = fuzzyAsset(state.assets, text);
+      if (!asset && opts.assetId) asset = assetById(state, opts.assetId);
+    }
+    let description = text
+      .replace(/^\s*(work order|general task|plant task|general\s*\/\s*plant task)\s*,?\s*/i, "")
+      .replace(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/ig, "")
+      .replace(/\bassign(?:ed)?\s+to\s+[a-z][a-z .'-]{1,40}/ig, "")
+      .replace(/\b(?:location|area)\s+(?:is\s+|to\s+)?[a-z0-9][a-z0-9 .'-]{0,60}/ig, "")
+      .replace(/\b(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, "")
+      .replace(/\s+,/g, ",").replace(/^[,\s]+|[,\s]+$/g, "").replace(/\s{2,}/g, " ").trim();
+    if (!description) description = text;
+    const title = description.split(/[.]/)[0].slice(0, 80);
+    return {
+      type, priority, dueDate, assignedTo, assignedName, location,
+      assetId: asset ? asset.id : "", assetTag: asset ? asset.tag : "", assetName: asset ? asset.name : "",
+      title, description, transcript: text
+    };
+  }
+  function applyVoiceCommand(parsed, utterance, state, opts) {
+    const command = voiceCommand(utterance);
+    if (command !== "change") return { command, parsed: parsed || null };
+    const extra = String(utterance || "").replace(/^\s*change\s+(?:it\s+)?(?:to\s+)?/i, "");
+    const next = parseVoiceWorkOrder((((parsed && parsed.transcript) || "") + " " + extra).trim(), state, opts || {});
+    return { command: "change", parsed: next };
+  }
+  function voiceCommand(utterance) {
+    const u = String(utterance || "").toLowerCase().trim().replace(/[.!?]+$/g, "");
+    if (/^(save|save it|yes|yeah|do it|confirm|go ahead)$/.test(u)) return "save";
+    if (/^(cancel|cancel it|never mind|discard|stop|no)$/.test(u)) return "cancel";
+    if (/^change\b/.test(u)) return "change";
+    return "";
+  }
+  function voiceSummary(parsed) {
+    parsed = parsed || {};
+    const bits = [parsed.type || "Repair"];
+    if (parsed.assetTag) bits.push("on " + parsed.assetTag + (parsed.assetName ? " " + parsed.assetName : ""));
+    else bits.push("no machine, general");
+    if (parsed.location) bits.push("location " + parsed.location);
+    if (parsed.description) bits.push(parsed.description);
+    if (parsed.priority && parsed.priority !== "Normal") bits.push("priority " + parsed.priority);
+    if (parsed.assignedName) bits.push("assigned to " + parsed.assignedName);
+    if (parsed.dueDate) bits.push("due " + parsed.dueDate);
+    bits.push("Say save, cancel, or change.");
+    return bits.join(". ");
+  }
 
   function chunkOps(ops, size) {
     const n = size || MAX_BATCH;
@@ -1161,13 +1299,14 @@
   }
 
   return {
-    STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, ASSET_STATUSES, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
+    STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, GENERAL_TYPE, ASSET_STATUSES, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
     MAX_BATCH, chunkOps, planPartAbsolutes, syncNotices,
     num, hasNum, yes, round2, money, pad, today, addDays, daysBetween, startOfWeek, dayOf, fmtDate, fmtShort, uid, clone, inRange, emptyState,
     nextOnHand, techById, assetById, partById, levelById, taskById, woById, isMetered, isActive, meterWord, whoName, priorityRank, isOverdueWo,
     parseParts, stockNote, intervalLabel, runRatePerDay, pmInfo, dueDateFor, woCosts, nextWoNumber,
     saveTech, deleteTech, saveAsset, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
-    generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, rangeBounds, compatibleParts, sortWork
+    generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, rangeBounds, compatibleParts, sortWork,
+    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, voiceSummary
   };
 });

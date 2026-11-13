@@ -19,7 +19,7 @@ const COLUMNS = {
   assets: ['id', 'tag', 'name', 'area', 'type', 'make', 'model', 'year', 'serial', 'status', 'metered', 'meterType', 'meter', 'notes', 'createdAt', 'updatedAt'],
   levels: ['id', 'assetId', 'name', 'basis', 'everyDays', 'everyMeter', 'active', 'notes', 'createdAt'],
   pmTasks: ['id', 'assetId', 'levelId', 'name', 'instructions', 'partsJson', 'active', 'lastCompletedAt', 'lastMeter', 'lastWoId', 'createdAt'],
-  workOrders: ['id', 'woNumber', 'assetId', 'assetTag', 'assetName', 'title', 'description', 'type', 'status', 'priority', 'assignedTo', 'assignedName', 'requestedBy', 'dueDate', 'openedDate', 'completedDate', 'downtimeHours', 'meterAt', 'workPerformed', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'pmTaskId', 'source', 'voiceTranscript', 'notes', 'failureCode', 'rootCause', 'createdAt', 'updatedAt'],
+  workOrders: ['id', 'woNumber', 'assetId', 'assetTag', 'assetName', 'title', 'description', 'type', 'status', 'priority', 'assignedTo', 'assignedName', 'requestedBy', 'dueDate', 'openedDate', 'completedDate', 'downtimeHours', 'meterAt', 'workPerformed', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'pmTaskId', 'source', 'voiceTranscript', 'notes', 'failureCode', 'rootCause', 'location', 'createdAt', 'updatedAt'],
   parts: ['id', 'sku', 'name', 'description', 'bin', 'onHand', 'reorderPoint', 'reorderQty', 'unitCost', 'vendor', 'notes', 'createdAt', 'updatedAt'],
   fits: ['id', 'partId', 'assetId', 'notes', 'addedBy', 'createdAt'],
   uses: ['id', 'workOrderId', 'partId', 'assetId', 'partSku', 'partName', 'qty', 'unitCost', 'extended', 'techId', 'createdAt'],
@@ -433,7 +433,10 @@ function digestText() {
   const lines = ['Plant maintenance — ' + day, ''];
   readAll('assets').forEach(function (a) { if (a.status === 'Down') lines.push('DOWN  ' + a.tag + '  ' + a.name); });
   readAll('workOrders').forEach(function (w) {
-    if (w.status !== 'complete' && w.status !== 'cancelled' && w.status !== 'draft' && w.dueDate && w.dueDate < day) lines.push('LATE  ' + w.woNumber + '  ' + w.assetTag + '  ' + w.title);
+    if (w.status !== 'complete' && w.status !== 'cancelled' && w.status !== 'draft' && w.dueDate && w.dueDate < day) {
+        var where = w.assetTag || (w.location ? ('No machine · ' + w.location) : 'No machine');
+        lines.push('LATE  ' + w.woNumber + '  ' + where + '  ' + w.title);
+      }
   });
   readAll('parts').forEach(function (p) {
     if (p.onHand !== '' && p.reorderPoint !== '' && Number(p.onHand) <= Number(p.reorderPoint)) lines.push('LOW   ' + p.sku + '  on hand ' + p.onHand + '  reorder ' + p.reorderPoint);

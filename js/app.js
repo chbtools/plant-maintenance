@@ -1,11 +1,16 @@
 /* Plant Maintenance UI. Phones and shop computers share this page.
-   Quick flag and work-order boxes are ordinary text fields so Wispr Flow
-   (or a keyboard) can type into them. Mic is the browser's speech recognition. */
+   Every text box stays a normal field so Wispr Flow, Gboard, and the keyboard
+   can type into it. A small Mic button uses this browser's speech recognition
+   and writes into that same box. Search lists update in place so the box is
+   not rebuilt while you are still typing. */
 (function () {
   const PM = window.PM;
   const view = document.getElementById("view");
   let state = PM.emptyState();
   let stopMic = function () {};
+  let composing = false;
+  document.addEventListener("compositionstart", () => { composing = true; });
+  document.addEventListener("compositionend", () => { composing = false; });
   const ui = {
     me: "",
     workView: "open",
@@ -86,6 +91,7 @@
   function closeSheet() {
     stopMic();
     stopMic = function () {};
+    if (typeof stopVoiceSession === "function") stopVoiceSession();
     document.getElementById("sheetRoot").innerHTML = "";
     document.body.style.overflow = "";
   }
@@ -97,6 +103,7 @@
     sc.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", closeSheet));
     document.body.style.overflow = "hidden";
     if (mount) mount(sc);
+    attachMics(sc);
   }
   function showErr(msg) {
     const el = byId("formErr");
@@ -106,40 +113,68 @@
   function focusField(id) {
     const el = byId(id);
     if (!el) return;
+    if (composing && document.activeElement === el) return;
     el.focus();
-    const n = el.value.length;
-    try { el.setSelectionRange(n, n); } catch (e) {}
+    if (composing || document.activeElement !== el) return;
+    try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {}
   }
-  /* Browser speech writes into the same box Wispr Flow and the keyboard use.
-     It never replaces the field with a special control, and it leaves existing words in place. */
-  function wireMic(buttonId, fieldId) {
-    const btn = byId(buttonId);
-    const field = byId(fieldId);
-    if (!btn || !field) return;
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { btn.hidden = true; return; }
-    let rec = null;
-    let prefix = "";
-    const stop = () => { if (rec) { try { rec.onend = null; rec.stop(); } catch (e) {} rec = null; } btn.setAttribute("aria-pressed", "false"); btn.textContent = "Mic"; };
-    stopMic = stop;
-    btn.addEventListener("click", () => {
-      if (rec) { stop(); field.focus(); return; }
-      try { rec = new SR(); } catch (e) { toast("The mic isn't available in this browser. Type in the box, or dictate with Wispr Flow."); return; }
-      prefix = field.value.trim() ? field.value.replace(/\s+$/, "") + " " : "";
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = "en-US";
-      rec.onresult = ev => {
-        let said = "";
-        for (let i = 0; i < ev.results.length; i++) said += ev.results[i][0].transcript;
-        field.value = prefix + said;
-        field.dataset.mic = "1";
-        focusField(fieldId);
-      };
-      rec.onerror = () => { stop(); toast("The mic isn't available in this browser. Type in the box, or dictate with Wispr Flow."); };
-      rec.onend = () => { rec = null; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Mic"; field.focus(); };
-      try { rec.start(); btn.setAttribute("aria-pressed", "true"); btn.textContent = "Stop"; field.focus(); }
-      catch (e) { rec = null; toast("The mic isn't available in this browser. Type in the box, or dictate with Wispr Flow."); }
+  function speechOk() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); }
+  function voiceWoButton(assetId) {
+    if (!speechOk()) return "";
+    if (window.Floor && Floor.shown && !Floor.shown("voicewo")) return "";
+    return `<button class="btn primary voice-wo" type="button" data-action="voice-wo" data-id="${esc(assetId || "")}">Voice work order</button>`;
+  }
+  /* One mic on every text box. Hidden when this browser has no speech recognition.
+     Writing the words does not move the caret during keyboard composition. */
+  function attachMics(root) {
+    if (!root) return;
+    root.querySelectorAll("input, textarea").forEach(field => {
+      if (field.dataset.micAttached) return;
+      const type = (field.getAttribute("type") || "text").toLowerCase();
+      if (field.tagName === "INPUT" && !["text", "search", "email", "tel", "number"].includes(type)) return;
+      field.dataset.micAttached = "1";
+      if (!field.getAttribute("autocomplete") || field.getAttribute("autocomplete") === "off") field.setAttribute("autocomplete", "on");
+      field.setAttribute("autocorrect", "on");
+      if (!field.getAttribute("autocapitalize")) field.setAttribute("autocapitalize", "sentences");
+      field.setAttribute("spellcheck", "true");
+      if (!speechOk()) return;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn small mic-btn";
+      btn.textContent = "Mic";
+      btn.setAttribute("aria-label", "Dictate into this field");
+      const wrap = document.createElement("div");
+      wrap.className = "mic-wrap";
+      if (field.classList.contains("grow")) { wrap.classList.add("grow"); field.classList.remove("grow"); }
+      field.parentNode.insertBefore(wrap, field);
+      wrap.appendChild(field);
+      wrap.appendChild(btn);
+      let rec = null, prefix = "";
+      const stop = () => { if (rec) { try { rec.onend = null; rec.stop(); } catch (e) {} rec = null; } btn.setAttribute("aria-pressed", "false"); btn.textContent = "Mic"; };
+      btn.addEventListener("click", () => {
+        if (rec) { stop(); return; }
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        try { rec = new SR(); } catch (e) { toast("The mic isn't available in this browser. Type in the box, or dictate with Wispr Flow."); return; }
+        stopMic();
+        stopMic = stop;
+        prefix = field.value.trim() ? field.value.replace(/\s+$/, "") + " " : "";
+        rec.continuous = true;
+        rec.interimResults = true;
+        rec.lang = "en-US";
+        rec.onresult = ev => {
+          if (composing) return;
+          let said = "";
+          for (let i = 0; i < ev.results.length; i++) said += ev.results[i][0].transcript;
+          if (type === "number") said = said.replace(/[^\d.]/g, "");
+          field.value = prefix + said;
+          field.dataset.mic = "1";
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+        };
+        rec.onerror = () => { stop(); toast("The mic isn't available in this browser. Type in the box, or dictate with Wispr Flow."); };
+        rec.onend = () => { rec = null; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Mic"; };
+        try { rec.start(); btn.setAttribute("aria-pressed", "true"); btn.textContent = "Stop"; }
+        catch (e) { rec = null; toast("The mic isn't available in this browser. Type in the box, or dictate with Wispr Flow."); }
+      });
     });
   }
   async function commit(result, opt) {
@@ -253,6 +288,7 @@
       console.error(err);
       view.innerHTML = `<div class="empty"><h3>This page hit a snag</h3><p>${esc(err.message)}</p></div>`;
     }
+    attachMics(view);
   }
 
   function renderHome() {
@@ -261,6 +297,7 @@
     const max = d.topAssets[0] ? d.topAssets[0].total : 1;
     view.innerHTML = `
       ${Store.mode === "sample" ? `<p class="intro">Practice plant: wall line, compressor, gantry, and Randy Johnson's crew. Floor tools (QR, inspections, the compressor room) are under Floor.</p>` : ""}
+      ${voiceWoButton("")}
       ${window.Floor && Floor.shown("today") ? `<p class="note"><a href="#today">Today</a> — ${PM.todayBrief(state, PM.today()).down.length} down, ${PM.todayBrief(state, PM.today()).pms.length} PM due, ${PM.todayBrief(state, PM.today()).late.length} late, ${PM.todayBrief(state, PM.today()).low.length} low stock.</p>` : ""}
       <section class="kpis" aria-label="Plant summary">
         ${k("open", "Open work", d.lateCount ? d.openCount + " · " + d.lateCount + " late" : String(d.openCount), d.lateCount ? "bad" : d.openCount ? "warn" : "")}
@@ -290,36 +327,52 @@
       </div>`;
   }
 
-  function renderWork() {
-    const day = PM.today();
+  function woTag(w) {
+    if (w.assetTag) return `<span class="tag">${esc(w.assetTag)}</span>`;
+    if (PM.isGeneral(w)) return `<span class="tag">No machine</span>`;
+    return `<span class="tag">Draft</span>`;
+  }
+  function filteredWork(day) {
     const q = ui.workQ.toLowerCase();
-    const views = [
-      ["open", "Open"], ["mine", "Mine"], ["unassigned", "Unassigned"], ["drafts", "Drafts"], ["done", "Done"], ["all", "All"]
-    ];
     let list = state.workOrders.slice();
     if (ui.workView === "open") list = list.filter(w => PM.isActive(w.status));
     else if (ui.workView === "mine") list = list.filter(w => PM.isActive(w.status) && w.assignedTo === ui.me);
     else if (ui.workView === "unassigned") list = list.filter(w => PM.isActive(w.status) && !w.assignedTo);
     else if (ui.workView === "drafts") list = list.filter(w => w.status === "draft");
     else if (ui.workView === "done") list = list.filter(w => w.status === "complete" && w.completedDate >= PM.addDays(day, -90));
-    if (q) list = list.filter(w => [w.woNumber, w.title, w.description, w.assetTag, w.assetName, PM.whoName(state, w), w.voiceTranscript].join(" ").toLowerCase().includes(q));
-    list = ui.workView === "done" ? list.sort((a, b) => String(b.completedDate).localeCompare(String(a.completedDate))) : PM.sortWork(list, day);
+    if (q) list = list.filter(w => [w.woNumber, w.title, w.description, w.assetTag, w.assetName, w.location, PM.whoName(state, w), w.voiceTranscript].join(" ").toLowerCase().includes(q));
+    return ui.workView === "done" ? list.sort((a, b) => String(b.completedDate).localeCompare(String(a.completedDate))) : PM.sortWork(list, day);
+  }
+  function workCards(list, day) {
+    if (!list.length) return `<div class="empty"><h3>${ui.workView === "mine" && !ui.me ? "Choose your name" : "Nothing in this list"}</h3><p>${ui.workView === "drafts" ? "A quick flag lands here as a draft." : "Write a work order or flag something from the floor."}</p><button class="btn primary" type="button" data-action="new-wo">+ Work order</button></div>`;
+    return `<div class="cards">${list.map(w => `<a class="card ${w.priority === "Urgent" ? "urgent" : w.priority === "High" ? "high" : ""}" href="#wo/${esc(w.id)}" data-wo="${esc(w.id)}">
+        <div class="card-top">${woTag(w)}<span class="title">${esc(w.title)}</span>${w.priority === "High" || w.priority === "Urgent" ? `<span class="pill ${w.priority === "Urgent" ? "bad" : "warn"}">${esc(w.priority)}</span>` : ""}</div>
+        <div class="meta">${statusPill(w.status)}${who(w)}<span class="mono">${esc(w.woNumber)}</span>${w.location && !w.assetTag ? `<span>${esc(w.location)}</span>` : ""}${w.dueDate ? `<span>${PM.isOverdueWo(w, day) ? "Overdue " : "Due "}${esc(PM.fmtShort(w.dueDate))}</span>` : ""}${PM.woCosts(state, w.id).total ? `<span class="num">${esc(PM.money(PM.woCosts(state, w.id).total))}</span>` : ""}</div>
+      </a>`).join("")}</div>`;
+  }
+  function renderWork() {
+    const day = PM.today();
+    const views = [
+      ["open", "Open"], ["mine", "Mine"], ["unassigned", "Unassigned"], ["drafts", "Drafts"], ["done", "Done"], ["all", "All"]
+    ];
     view.innerHTML = `
+      ${voiceWoButton("")}
       <div class="me-row"><span>This phone</span>${sel("meSel", ui.me, [["", "Choose your name…"]].concat(sortedTechs().map(t => [t.id, t.name])))}</div>
       <div class="toolbar"><div class="chips" role="group">${views.map(([k, l]) => `<button class="chip" type="button" data-view="${k}" aria-pressed="${ui.workView === k}">${l}</button>`).join("")}</div>
-        <input class="grow" id="workQ" type="search" placeholder="Search work, asset, tech, WO #" value="${esc(ui.workQ)}" aria-label="Search work orders"></div>
-      ${list.length ? `<div class="cards">${list.map(w => `<a class="card ${w.priority === "Urgent" ? "urgent" : w.priority === "High" ? "high" : ""}" href="#wo/${esc(w.id)}" data-wo="${esc(w.id)}">
-        <div class="card-top">${w.assetTag ? `<span class="tag">${esc(w.assetTag)}</span>` : `<span class="tag">Draft</span>`}<span class="title">${esc(w.title)}</span>${w.priority === "High" || w.priority === "Urgent" ? `<span class="pill ${w.priority === "Urgent" ? "bad" : "warn"}">${esc(w.priority)}</span>` : ""}</div>
-        <div class="meta">${statusPill(w.status)}${who(w)}<span class="mono">${esc(w.woNumber)}</span>${w.dueDate ? `<span>${PM.isOverdueWo(w, day) ? "Overdue " : "Due "}${esc(PM.fmtShort(w.dueDate))}</span>` : ""}${PM.woCosts(state, w.id).total ? `<span class="num">${esc(PM.money(PM.woCosts(state, w.id).total))}</span>` : ""}</div>
-      </a>`).join("")}</div>` : `<div class="empty"><h3>${ui.workView === "mine" && !ui.me ? "Choose your name" : "Nothing in this list"}</h3><p>${ui.workView === "drafts" ? "A quick flag lands here as a draft." : "Write a work order or flag something from the floor."}</p><button class="btn primary" type="button" data-action="new-wo">+ Work order</button></div>`}`;
+        <input class="grow" id="workQ" type="search" placeholder="Search work, asset, tech, WO #" value="${esc(ui.workQ)}" aria-label="Search work orders" autocomplete="on"></div>
+      <div id="workList">${workCards(filteredWork(day), day)}</div>`;
     view.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => {
       if (b.dataset.view === "mine" && !ui.me) { toast("Choose your name first."); byId("meSel").focus(); return; }
       ui.workView = b.dataset.view; renderWork(); paintChrome();
     }));
     const ms = byId("meSel");
     if (ms) ms.addEventListener("change", () => { ui.me = ms.value; saveUi(); if (ui.me) { ui.workView = "mine"; toast("This phone is " + meName()); } render(); });
-    const qbox = byId("workQ");
-    let t; qbox.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { ui.workQ = qbox.value; renderWork(); const n = byId("workQ"); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 180); });
+    bindSearch("workQ", value => {
+      ui.workQ = value;
+      const host = byId("workList");
+      if (host) host.innerHTML = workCards(filteredWork(day), day);
+    });
+    attachMics(view);
   }
 
   function renderWo(id) {
@@ -338,7 +391,8 @@
       <div class="detail-grid">
         <div class="stack main">
           <article class="panel">
-            <div class="card-top">${w.assetTag ? `<a class="tag" href="#asset/${esc(w.assetId)}">${esc(w.assetTag)}</a>` : `<span class="tag">No asset</span>`}<h2 class="title" style="margin:0;font-size:1.35rem">${esc(w.title)}</h2></div>
+            <div class="card-top">${w.assetTag ? `<a class="tag" href="#asset/${esc(w.assetId)}">${esc(w.assetTag)}</a>` : `<span class="tag">${PM.isGeneral(w) ? "No machine" : "No asset"}</span>`}<h2 class="title" style="margin:0;font-size:1.35rem">${esc(w.title)}</h2></div>
+            ${PM.isGeneral(w) ? `<p class="note">No machine · General${w.location ? " · " + esc(w.location) : ""}</p>` : ""}
             <p class="prose">${esc(w.description || "")}</p>
             ${w.voiceTranscript && w.voiceTranscript !== w.description ? `<p class="note">Dictated: ${esc(w.voiceTranscript)}</p>` : ""}
             ${w.workPerformed ? `<h3>Work performed</h3><p class="prose">${esc(w.workPerformed)}</p>` : ""}
@@ -346,7 +400,7 @@
           <article class="panel"><h2>Parts on this job</h2>
             ${uses.length ? uses.map(u => `<div class="partline"><div><b>${esc(u.qty)} × ${esc(u.partSku)}</b> ${esc(u.partName)}<div class="note">${esc(PM.money(u.extended))}</div></div><button class="btn small" type="button" data-action="return-use" data-id="${esc(u.id)}">Return</button></div>`).join("") : `<p class="note">No parts used yet.</p>`}
             ${asset ? `<h3>Parts that fit ${esc(asset.tag)}</h3>${comp.linked.length ? comp.linked.map(p => partRow(p, true)).join("") : `<p class="note">Nothing is linked to this machine yet. Add one from the list below, or from the asset.</p>`}
-              <details><summary>Other stock</summary>${comp.rest.map(p => partRow(p, false)).join("") || `<p class="note">No other parts.</p>`}</details>` : `<p class="note">Pick the equipment on this draft and the parts that fit it will show up here.</p>`}
+              <details><summary>Other stock</summary>${comp.rest.map(p => partRow(p, false)).join("") || `<p class="note">No other parts.</p>`}</details>` : `<p class="note">${PM.isGeneral(w) ? "This plant task isn't tied to a machine, so parts are picked from the full list when you edit the job." : "Pick the equipment on this draft and the parts that fit it will show up here."}</p>`}
           </article>
           <article class="panel"><h2>Time</h2>
             ${times.length ? times.map(t => `<div class="partline"><div><b>${esc(t.techName)}</b> ${esc(t.date)} · ${esc(t.hours)} h<div class="note">${esc(t.notes || "")} ${esc(PM.money(PM.num(t.hours) * PM.num(t.rate)))}</div></div><button class="btn small" type="button" data-action="delete-time" data-id="${esc(t.id)}">Remove</button></div>`).join("") : `<p class="note">No hours logged.</p>`}
@@ -386,18 +440,27 @@
   }
 
   function renderAssets() {
+    view.innerHTML = `
+      <div class="toolbar"><input class="grow" id="assetQ" type="search" placeholder="Search tag, name, area" value="${esc(ui.assetQ)}" aria-label="Search equipment" autocomplete="on"><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>
+      <div id="assetList">${assetCards()}</div>`;
+    bindSearch("assetQ", value => {
+      ui.assetQ = value;
+      const host = byId("assetList");
+      if (host) host.innerHTML = assetCards();
+    });
+    attachMics(view);
+  }
+  function assetCards() {
     const q = ui.assetQ.toLowerCase();
     const list = sortedAssets().filter(a => !q || [a.tag, a.name, a.area, a.type, a.make, a.model].join(" ").toLowerCase().includes(q));
     const day = PM.today();
-    view.innerHTML = `
-      <div class="toolbar"><input class="grow" id="assetQ" type="search" placeholder="Search tag, name, area" value="${esc(ui.assetQ)}" aria-label="Search equipment"><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>
-      ${list.length ? `<div class="cards">${list.map(a => {
-        const spend = PM.spendBetween(state, PM.addDays(day, -89), day, a.id);
-        const due = state.pmTasks.filter(t => t.assetId === a.id && ["overdue", "due", "soon"].includes(PM.pmInfo(state, t, day).status)).length;
-        return `<a class="card" href="#asset/${esc(a.id)}"><div class="card-top"><span class="tag">${esc(a.tag)}</span><span class="title">${esc(a.name)}<small style="display:block;font-weight:400;color:var(--muted)">${esc(a.area || a.type || "")}</small></span>${assetPill(a)}</div>
+    if (!list.length) return `<div class="empty"><h3>No equipment yet</h3><p>Add each machine once. Then work orders, parts, and PMs hang off it.</p><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>`;
+    return `<div class="cards">${list.map(a => {
+      const spend = PM.spendBetween(state, PM.addDays(day, -89), day, a.id);
+      const due = state.pmTasks.filter(t => t.assetId === a.id && ["overdue", "due", "soon"].includes(PM.pmInfo(state, t, day).status)).length;
+      return `<a class="card" href="#asset/${esc(a.id)}"><div class="card-top"><span class="tag">${esc(a.tag)}</span><span class="title">${esc(a.name)}<small style="display:block;font-weight:400;color:var(--muted)">${esc(a.area || a.type || "")}</small></span>${assetPill(a)}</div>
           <div class="meta"><span>${PM.isMetered(a) && PM.hasNum(a.meter) ? esc(PM.num(a.meter).toLocaleString()) + " " + esc(PM.meterWord(a)) : "No meter"}</span><span>90-day ${esc(money0(spend.total))}</span>${due ? `<span>${due} PM</span>` : ""}</div></a>`;
-      }).join("")}</div>` : `<div class="empty"><h3>No equipment yet</h3><p>Add each machine once. Then work orders, parts, and PMs hang off it.</p><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>`}`;
-    bindSearch("assetQ", v => { ui.assetQ = v; renderAssets(); });
+    }).join("")}</div>`;
   }
 
   function renderAsset(id) {
@@ -423,6 +486,7 @@
             <div class="actions">
               <button class="btn" type="button" data-action="edit-asset" data-id="${esc(a.id)}">Edit</button>
               <button class="btn primary" type="button" data-action="new-wo" data-id="${esc(a.id)}">+ Work order</button>
+              ${voiceWoButton(a.id)}
               ${PM.isMetered(a) ? `<button class="btn" type="button" data-action="log-meter" data-id="${esc(a.id)}">Log meter</button>` : ""}
               <button class="btn" type="button" data-action="log-time-asset" data-id="${esc(a.id)}">Log time</button>
               ${window.Floor ? Floor.assetExtra(a, esc) : ""}
@@ -453,23 +517,32 @@
   }
 
   function renderParts() {
+    view.innerHTML = `
+      <div class="toolbar"><div class="chips"><button class="chip" type="button" data-pv="all" aria-pressed="${ui.partView === "all"}">All</button><button class="chip" type="button" data-pv="low" aria-pressed="${ui.partView === "low"}">Low stock</button></div>
+        <input class="grow" id="partQ" type="search" placeholder="Search part number or name" value="${esc(ui.partQ)}" aria-label="Search parts" autocomplete="on"><button class="btn" type="button" id="reorderBtn">Reorder CSV</button><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>
+      <div id="partList">${partCards()}</div>`;
+    view.querySelectorAll("[data-pv]").forEach(b => b.addEventListener("click", () => { ui.partView = b.dataset.pv; renderParts(); }));
+    const reorderBtn = byId("reorderBtn");
+    if (reorderBtn) reorderBtn.addEventListener("click", () => download("reorder-list.csv", PM.reorderCsv(state)));
+    bindSearch("partQ", value => {
+      ui.partQ = value;
+      const host = byId("partList");
+      if (host) host.innerHTML = partCards();
+    });
+    attachMics(view);
+  }
+  function partCards() {
     const q = ui.partQ.toLowerCase();
     let list = state.parts.slice().sort((a, b) => (PM.num(a.onHand) <= PM.num(a.reorderPoint) ? 0 : 1) - (PM.num(b.onHand) <= PM.num(b.reorderPoint) ? 0 : 1) || String(a.sku).localeCompare(String(b.sku)));
     if (ui.partView === "low") list = list.filter(p => PM.num(p.onHand) <= PM.num(p.reorderPoint));
     if (q) list = list.filter(p => [p.sku, p.name, p.bin, p.vendor].join(" ").toLowerCase().includes(q));
-    view.innerHTML = `
-      <div class="toolbar"><div class="chips"><button class="chip" type="button" data-pv="all" aria-pressed="${ui.partView === "all"}">All</button><button class="chip" type="button" data-pv="low" aria-pressed="${ui.partView === "low"}">Low stock</button></div>
-        <input class="grow" id="partQ" type="search" placeholder="Search part number or name" value="${esc(ui.partQ)}" aria-label="Search parts"><button class="btn" type="button" id="reorderBtn">Reorder CSV</button><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>
-      ${list.length ? `<div class="cards">${list.map(p => {
-        const low = PM.num(p.onHand) <= PM.num(p.reorderPoint);
-        const tags = state.fits.filter(f => f.partId === p.id).map(f => (PM.assetById(state, f.assetId) || {}).tag).filter(Boolean);
-        return `<a class="card" href="#part/${esc(p.id)}" data-sku="${esc(p.sku)}"><div class="card-top"><span class="tag">${esc(p.sku)}</span><span class="title">${esc(p.name)}</span>${low ? pill("warn", "Reorder") : ""}</div>
+    if (!list.length) return `<div class="empty"><h3>No parts</h3><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>`;
+    return `<div class="cards">${list.map(p => {
+      const low = PM.num(p.onHand) <= PM.num(p.reorderPoint);
+      const tags = state.fits.filter(f => f.partId === p.id).map(f => (PM.assetById(state, f.assetId) || {}).tag).filter(Boolean);
+      return `<a class="card" href="#part/${esc(p.id)}" data-sku="${esc(p.sku)}"><div class="card-top"><span class="tag">${esc(p.sku)}</span><span class="title">${esc(p.name)}</span>${low ? pill("warn", "Reorder") : ""}</div>
           <div class="meta"><span data-onhand="${esc(p.sku)}">On hand ${esc(PM.num(p.onHand))}</span><span>Reorder at ${esc(PM.num(p.reorderPoint))}</span><span>${esc(PM.money(p.unitCost))}</span>${tags.length ? `<span>Fits ${esc(tags.join(", "))}</span>` : ""}</div></a>`;
-      }).join("")}</div>` : `<div class="empty"><h3>No parts</h3><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>`}`;
-    view.querySelectorAll("[data-pv]").forEach(b => b.addEventListener("click", () => { ui.partView = b.dataset.pv; renderParts(); }));
-    const reorderBtn = byId("reorderBtn");
-    if (reorderBtn) reorderBtn.addEventListener("click", () => download("reorder-list.csv", PM.reorderCsv(state)));
-    bindSearch("partQ", v => { ui.partQ = v; renderParts(); });
+    }).join("")}</div>`;
   }
 
   function renderPart(id) {
@@ -584,7 +657,9 @@
         <h3>Quick flag</h3>
         <p>Tap <b>Quick flag</b>. Click the big box. Dictate with <b>Wispr Flow</b> — it types into whatever box is selected — or type, or tap <b>Mic</b> for this browser's speech recognition. Save, and you get a draft work order to finish later. The words stay exactly as they landed in the box.</p>
         <h3>Work orders</h3>
-        <p>The title and the description are normal text boxes, so Wispr Flow, the keyboard, and the mic all work. Assign the job to a tech. Parts that fit that machine are listed on the job; <b>Use</b> takes them out of stock and adds the cost. If the count hits the reorder point, you'll see it here and on Home.</p>
+        <p>The title and the description are normal text boxes, so Wispr Flow, the keyboard, and the mic all work. Every text box in the app works that way, including search. Assign the job to a tech. Parts that fit that machine are listed on the job; <b>Use</b> takes them out of stock and adds the cost. If the count hits the reorder point, you'll see it here and on Home.</p>
+        <p>Set the type to <b>General / plant task</b> when the job is not on a machine. Leave equipment blank and type a location, such as Break room. The list shows <b>No machine</b>.</p>
+        <p><b>Voice work order</b> is on Home, Today, the work list, and a machine you opened from a QR label. One tap starts the mic. Say the job, listen to the read-back, then say save, cancel, or change. Browsers will not start the mic with no tap at all.</p>
         <h3>Equipment, levels, and PM</h3>
         <p>Add a machine under Assets. Give it levels (daily, weekly, monthly, or hours). Add a PM task on a level and list the parts it needs. <b>Make work order</b> opens the job, pulls those parts, and logs the cost on that asset. Metered machines get a suggested date from how fast the hours are climbing. Machines without a meter use the calendar.</p>
         <h3>Meters and time</h3>
@@ -617,7 +692,15 @@
     let t;
     el.addEventListener("input", () => {
       clearTimeout(t);
-      t = setTimeout(() => { apply(el.value); const n = byId(id); if (n) { n.focus(); n.setSelectionRange(n.value.length, n.value.length); } }, 180);
+      t = setTimeout(() => {
+        const box = byId(id);
+        if (!box) return;
+        if (!PM.dictationAllowsRender({ focused: document.activeElement === box, composing })) {
+          apply(box.value);
+          return;
+        }
+        apply(box.value);
+      }, 180);
     });
   }
   function download(filename, text) {
@@ -631,26 +714,25 @@
   }
 
   function textField(id, label, value, hint, kind) {
-    return `<div class="f"><label for="${id}">${label}</label><input id="${id}" class="dictate" data-dictate="${esc(kind || id)}" type="text" autocomplete="off" autocapitalize="sentences" spellcheck="true" value="${esc(value || "")}">${hint ? `<p class="hint">${hint}</p>` : ""}</div>`;
+    return `<div class="f"><label for="${id}">${label}</label><input id="${id}" class="dictate" data-dictate="${esc(kind || id)}" type="text" autocomplete="on" autocapitalize="sentences" spellcheck="true" value="${esc(value || "")}">${hint ? `<p class="hint">${hint}</p>` : ""}</div>`;
   }
   function areaField(id, label, value, hint, micId, kind, placeholder) {
-    return `<div class="f"><div class="lbl-row"><label for="${id}">${label}</label>${micId ? `<button class="btn small" type="button" id="${micId}">Mic</button>` : ""}</div>
-      <textarea id="${id}" class="dictate" data-dictate="${esc(kind || id)}" rows="6" autocomplete="off" autocapitalize="sentences" spellcheck="true" placeholder="${esc(placeholder || "")}">${esc(value || "")}</textarea>
+    return `<div class="f"><label for="${id}">${label}</label>
+      <textarea id="${id}" class="dictate" data-dictate="${esc(kind || id)}" rows="6" autocomplete="on" autocapitalize="sentences" spellcheck="true" placeholder="${esc(placeholder || "")}">${esc(value || "")}</textarea>
       ${hint ? `<p class="hint">${hint}</p>` : ""}</div>`;
   }
 
-  const WISPR = "Click the box and dictate with Wispr Flow, or type. Mic uses this browser's speech recognition and writes into the same box. Edit the words before you save.";
+  const WISPR = "Click the box and dictate with Wispr Flow, the phone keyboard mic, or type. Mic on this box uses the browser's speech recognition and writes into the same box. Edit the words before you save.";
 
   function flagForm() {
     openSheet("Quick flag", `
-      ${areaField("flagText", "What's going on?", "", "Dictate with Wispr Flow into this box, type it, or use the mic. This saves a draft work order to finish later.", "flagMic", "flag", "Bay 3 crane is grinding on the bridge travel…")}
+      ${areaField("flagText", "What's going on?", "", "Dictate with Wispr Flow into this box, type it, or use Mic. This saves a draft work order to finish later.", "", "flag", "Bay 3 crane is grinding on the bridge travel…")}
       <div class="g2"><div class="f"><label for="flagAsset">Equipment, if you know it</label>${sel("flagAsset", "", assetChoices("Not sure yet"))}</div>
         <div class="f"><label for="flagWho">Assign to</label>${sel("flagWho", ui.me, techChoices("Leave unassigned"))}</div></div>
       <div class="err" id="formErr" role="alert"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="flagSave">Save draft</button>`,
       () => {
         focusField("flagText");
-        wireMic("flagMic", "flagText");
         byId("flagSave").addEventListener("click", async () => {
           const text = val("flagText").trim();
           if (!text) { showErr("Say what you found, or type it in the box."); focusField("flagText"); return; }
@@ -671,11 +753,12 @@
     preset = preset || {};
     const assetId = preset.assetId || w.assetId || "";
     openSheet(existing ? "Edit " + w.woNumber : "New work order", `
-      <div class="f"><label for="wAsset">Equipment</label>${sel("wAsset", assetId, assetChoices("Not sure yet — save as a draft"))}</div>
+      <div class="f"><label for="wType">Type</label>${sel("wType", w.type || "Repair", PM.WO_TYPES.map(t => [t, t]))}</div>
+      <div class="f"><label for="wAsset">Equipment</label>${sel("wAsset", assetId, assetChoices("No machine — General / plant task, or a draft"))}</div>
+      ${textField("wLoc", "Location / area", w.location || "", "Optional. Used when this job isn't on a machine, for example Break room.")}
       ${textField("wTitle", "Title", w.title || "", "Leave this blank if you're dictating the whole job into the box below. The first line becomes the title.")}
-      ${areaField("wDesc", "What's wrong / what to do", w.description || "", WISPR, "wMic", "description", "Turner hose is wet and the mast drifts when the line sits.")}
+      ${areaField("wDesc", "What's wrong / what to do", w.description || "", WISPR, "", "description", "Turner hose is wet and the mast drifts when the line sits.")}
       <div class="g3">
-        <div class="f"><label for="wType">Type</label>${sel("wType", w.type || "Repair", PM.WO_TYPES.map(t => [t, t]))}</div>
         <div class="f"><label for="wPri">Priority</label>${sel("wPri", w.priority || "Normal", PM.PRIORITIES.map(t => [t, t]))}</div>
         <div class="f"><label for="wStat">Status</label>${sel("wStat", w.status === "complete" ? "complete" : (w.status || "open"), PM.STATUSES.filter(s => s !== "cancelled" && (s !== "complete" || w.status === "complete")).map(s => [s, PM.STATUS_LABEL[s]]))}</div>
       </div>
@@ -687,13 +770,12 @@
         <div class="f"><label for="wDown">Downtime hours</label><input id="wDown" type="number" min="0" step="0.1" value="${esc(w.downtimeHours || 0)}"></div>
         <div class="f"><label for="wOther">Other cost</label><input id="wOther" type="number" min="0" step="0.01" value="${esc(w.otherCost || 0)}"></div>
       </div>
-      <div class="f"><label for="wBy">Requested by</label><input id="wBy" type="text" value="${esc(w.requestedBy || "")}" autocomplete="off"></div>
+      <div class="f"><label for="wBy">Requested by</label><input id="wBy" type="text" value="${esc(w.requestedBy || "")}" autocomplete="on"></div>
       ${areaField("wDone", "Work performed", w.workPerformed || "", "Same kind of box — Wispr Flow types here when this box is selected.", "", "performed", "")}
       <div class="err" id="formErr" role="alert"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="wSave">${existing ? "Save" : "Create work order"}</button>`,
       () => {
         focusField(existing ? "wDesc" : "wTitle");
-        wireMic("wMic", "wDesc");
         byId("wSave").addEventListener("click", async () => {
           let title = val("wTitle").trim();
           let description = val("wDesc").trim();
@@ -701,11 +783,13 @@
           if (!description && title) description = title;
           const field = byId("wDesc");
           const status = val("wStat") || "open";
+          const type = val("wType");
           const result = PM.saveWo(state, {
             id: existing ? w.id : undefined,
-            assetId: val("wAsset"),
+            assetId: type === PM.GENERAL_TYPE ? "" : val("wAsset"),
+            location: val("wLoc"),
             title, description, status,
-            type: val("wType"), priority: val("wPri"), assignedTo: val("wWho"),
+            type, priority: val("wPri"), assignedTo: val("wWho"),
             dueDate: val("wDue"), downtimeHours: val("wDown"), otherCost: val("wOther"),
             requestedBy: val("wBy"), workPerformed: val("wDone"),
             source: existing ? w.source : (field.dataset.mic === "1" ? "voice" : "typed"),
@@ -721,20 +805,19 @@
 
   function completeForm(w) {
     const asset = PM.assetById(state, w.assetId);
-    if (!asset && w.status === "draft") { woForm(w); toast("Pick the equipment before completing this draft."); return; }
+    if (!asset && w.status === "draft" && !PM.isGeneral(w)) { woForm(w); toast("Pick the equipment before completing this draft, or set the type to General / plant task."); return; }
     openSheet("Complete " + w.woNumber, `
-      ${areaField("cDone", "Work performed", w.workPerformed || "", "Type or dictate what you did.", "cMic", "performed", "")}
+      ${areaField("cDone", "Work performed", w.workPerformed || "", "Type or dictate what you did.", "", "performed", "")}
       ${asset && PM.isMetered(asset) ? `<div class="f"><label for="cMeter">Meter now (${esc(PM.meterWord(asset))})</label><input id="cMeter" type="number" min="0" step="any" value="${esc(PM.hasNum(asset.meter) ? asset.meter : "")}"><p class="hint">This reading feeds the next PM date.</p></div>` : ""}
       <div class="g2"><div class="f"><label for="cDown">Downtime hours</label><input id="cDown" type="number" min="0" step="0.1" value="${esc(w.downtimeHours || 0)}"></div>
         <div class="f"><label for="cDate">Completed</label><input id="cDate" type="date" value="${esc(PM.today())}"></div></div>
       <div class="g2"><div class="f"><label for="cFail">Failure code</label>${sel("cFail", w.failureCode || "", [["", "Not set"]].concat(PM.failureCodeNames(state).map(n => [n, n])))}</div>
-        <div class="f"><label for="cRoot">Root cause</label><input id="cRoot" type="text" value="${esc(w.rootCause || "")}" placeholder="What actually caused it" autocomplete="off"></div></div>
+        <div class="f"><label for="cRoot">Root cause</label><input id="cRoot" type="text" value="${esc(w.rootCause || "")}" placeholder="What actually caused it" autocomplete="on"></div></div>
       <p class="note">The code list is under Floor → Failure codes.</p>
       <div class="err" id="formErr" role="alert"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="cSave">Mark complete</button>`,
       () => {
         focusField("cDone");
-        wireMic("cMic", "cDone");
         byId("cSave").addEventListener("click", () => commit(PM.setWoStatus(state, {
           id: w.id, status: "complete", workPerformed: val("cDone"), downtimeHours: val("cDown"),
           completedDate: val("cDate") || PM.today(), meterAt: byId("cMeter") ? val("cMeter") : "", techId: ui.me, date: val("cDate") || PM.today(),
@@ -756,7 +839,7 @@
       <p class="note">Current: ${PM.hasNum(a.meter) ? esc(PM.num(a.meter).toLocaleString()) + " " + esc(PM.meterWord(a)) : "nothing logged yet"}.</p>
       <div class="f"><label for="mRead">Reading</label><input id="mRead" type="number" min="0" step="any" inputmode="decimal"></div>
       <div class="f"><label for="mDate">Date</label><input id="mDate" type="date" value="${esc(PM.today())}"></div>
-      <div class="f"><label for="mNote">Note</label><input id="mNote" type="text" autocomplete="off"></div>
+      <div class="f"><label for="mNote">Note</label><input id="mNote" type="text" autocomplete="on"></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="mSave">Save reading</button>`,
       () => {
@@ -773,7 +856,7 @@
     const assetId = (wo && wo.assetId) || opts.assetId || "";
     openSheet("Log time", `
       <div class="f"><label for="tWho">Tech</label>${sel("tWho", ui.me, techChoices("Choose a tech…").slice(0))}</div>
-      ${wo ? `<p class="note">On ${esc(wo.woNumber)} · ${esc(wo.assetTag)} ${esc(wo.title)}</p>` : `<div class="f"><label for="tAsset">Equipment</label>${sel("tAsset", assetId, assetChoices())}</div>`}
+      ${wo ? `<p class="note">On ${esc(wo.woNumber)} · ${esc(wo.assetTag || (PM.isGeneral(wo) ? "No machine" : ""))} ${esc(wo.title)}</p>` : `<div class="f"><label for="tAsset">Equipment</label>${sel("tAsset", assetId, assetChoices())}</div>`}
       <div class="g2"><div class="f"><label for="tHours">Hours</label><input id="tHours" type="number" min="0" step="0.1" value="1"></div>
         <div class="f"><label for="tDate">Date</label><input id="tDate" type="date" value="${esc(PM.today())}"></div></div>
       ${areaField("tNote", "Note", "", "", "", "time-note", "What you spent the time on")}
@@ -791,14 +874,14 @@
   function assetForm(existing) {
     const a = existing || { status: "Running", metered: "no", meterType: "Hours" };
     openSheet(existing ? "Edit " + a.tag : "New equipment", `
-      <div class="g2"><div class="f"><label for="aTag">Tag</label><input id="aTag" type="text" value="${esc(a.tag || "")}" autocomplete="off" placeholder="WL-1"></div>
-        <div class="f"><label for="aName">Name</label><input id="aName" type="text" value="${esc(a.name || "")}" autocomplete="off"></div></div>
+      <div class="g2"><div class="f"><label for="aTag">Tag</label><input id="aTag" type="text" value="${esc(a.tag || "")}" autocomplete="on" placeholder="WL-1"></div>
+        <div class="f"><label for="aName">Name</label><input id="aName" type="text" value="${esc(a.name || "")}" autocomplete="on"></div></div>
       <div class="g2"><div class="f"><label for="aArea">Area</label><input id="aArea" type="text" value="${esc(a.area || "")}"></div>
         <div class="f"><label for="aType">Type</label><input id="aType" type="text" value="${esc(a.type || "")}"></div></div>
       <div class="g3"><div class="f"><label for="aMake">Make</label><input id="aMake" type="text" value="${esc(a.make || "")}"></div>
         <div class="f"><label for="aModel">Model</label><input id="aModel" type="text" value="${esc(a.model || "")}"></div>
         <div class="f"><label for="aYear">Year</label><input id="aYear" type="number" value="${esc(a.year || "")}"></div></div>
-      <div class="f"><label for="aSerial">Serial</label><input id="aSerial" type="text" value="${esc(a.serial || "")}" autocomplete="off"></div>
+      <div class="f"><label for="aSerial">Serial</label><input id="aSerial" type="text" value="${esc(a.serial || "")}" autocomplete="on"></div>
       <div class="g2"><div class="f"><label for="aStatus">Status</label>${sel("aStatus", a.status || "Running", PM.ASSET_STATUSES.map(s => [s, s]))}</div>
         <div class="f"><label for="aMetered">Meter</label>${sel("aMetered", a.metered === "yes" ? "yes" : "no", [["no", "No meter — calendar PM"], ["yes", "Has a meter"]])}</div></div>
       <div class="g2" id="meterBits"><div class="f"><label for="aMType">Meter type</label>${sel("aMType", a.meterType || "Hours", PM.METER_TYPES.map(s => [s, s]))}</div>
@@ -878,7 +961,7 @@
     }
     openSheet((existing ? "Edit PM" : "New PM") + " · " + (a ? a.tag : ""), `
       <div class="f"><label for="tLevel">Level</label>${sel("tLevel", t.levelId, levels.map(l => [l.id, l.name + " · " + PM.intervalLabel(l, a)]))}</div>
-      <div class="f"><label for="tName">Task</label><input id="tName" class="dictate" data-dictate="pm-name" type="text" value="${esc(t.name || "")}" autocomplete="off"></div>
+      <div class="f"><label for="tName">Task</label><input id="tName" class="dictate" data-dictate="pm-name" type="text" value="${esc(t.name || "")}" autocomplete="on"></div>
       ${areaField("tInst", "What to do", t.instructions || "", "Wispr Flow types into this box when it's selected.", "", "pm-instructions", "")}
       <div class="lbl">Parts to pull from inventory</div><div id="taskParts"></div>
       <button class="btn small" type="button" id="addLine">+ Required part</button>
@@ -904,8 +987,8 @@
   function partForm(existing) {
     const p = existing || {};
     openSheet(existing ? "Edit " + p.sku : "New part", `
-      <div class="g2"><div class="f"><label for="pSku">Part number</label><input id="pSku" type="text" value="${esc(p.sku || "")}" autocomplete="off"></div>
-        <div class="f"><label for="pName">Name</label><input id="pName" type="text" value="${esc(p.name || "")}" autocomplete="off"></div></div>
+      <div class="g2"><div class="f"><label for="pSku">Part number</label><input id="pSku" type="text" value="${esc(p.sku || "")}" autocomplete="on"></div>
+        <div class="f"><label for="pName">Name</label><input id="pName" type="text" value="${esc(p.name || "")}" autocomplete="on"></div></div>
       <div class="g2"><div class="f"><label for="pBin">Bin</label><input id="pBin" type="text" value="${esc(p.bin || "")}"></div>
         <div class="f"><label for="pVendor">Vendor</label><input id="pVendor" type="text" value="${esc(p.vendor || "")}"></div></div>
       <div class="g3"><div class="f"><label for="pCost">Unit cost</label><input id="pCost" type="number" min="0" step="0.01" value="${esc(p.unitCost || 0)}"></div>
@@ -932,7 +1015,7 @@
     const p = PM.partById(state, id);
     openSheet("Receive " + p.sku, `<p class="note">On hand now: ${esc(PM.num(p.onHand))}. This adds to the count.</p>
       <div class="f"><label for="rQty">Quantity in</label><input id="rQty" type="number" min="0" step="any" value="1"></div>
-      <div class="f"><label for="rNote">Note</label><input id="rNote" type="text" placeholder="PO or packing slip" autocomplete="off"></div>
+      <div class="f"><label for="rNote">Note</label><input id="rNote" type="text" placeholder="PO or packing slip" autocomplete="on"></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="rSave">Receive</button>`,
       () => byId("rSave").addEventListener("click", () => commit(PM.receiveStock(state, { partId: id, qty: val("rQty"), note: val("rNote") }), { hash: "#part/" + id })));
@@ -941,7 +1024,7 @@
     const p = PM.partById(state, id);
     openSheet("Correct " + p.sku, `<p>Use this after you count the bin. It replaces the on-hand number. Receiving new stock should use Receive, so two phones don't overwrite each other.</p>
       <div class="f"><label for="aOn">Counted quantity</label><input id="aOn" type="number" min="0" step="any" value="${esc(PM.num(p.onHand))}"></div>
-      <div class="f"><label for="aNote">Note</label><input id="aNote" type="text" value="Physical count" autocomplete="off"></div>
+      <div class="f"><label for="aNote">Note</label><input id="aNote" type="text" value="Physical count" autocomplete="on"></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="aSave">Set count</button>`,
       () => byId("aSave").addEventListener("click", () => commit(PM.adjustStock(state, { partId: id, onHand: val("aOn"), note: val("aNote") }), { hash: "#part/" + id })));
@@ -954,7 +1037,7 @@
     if (!choices.length) { partForm(); toast("Every part is already on this machine, or there are no parts yet. Add a part, then link it."); return; }
     openSheet("Add a part to " + a.tag, `
       <div class="f"><label for="fPart">Part</label>${sel("fPart", choices[0].id, choices.map(p => [p.id, p.sku + " — " + p.name]))}</div>
-      <div class="f"><label for="fNote">Where it goes on this machine</label><input id="fNote" type="text" autocomplete="off" placeholder="Turner whip hose"></div>
+      <div class="f"><label for="fNote">Where it goes on this machine</label><input id="fNote" type="text" autocomplete="on" placeholder="Turner whip hose"></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn" type="button" id="fNew">New part</button><span class="sp"></span><button class="btn primary" type="button" id="fSave">Add to this machine</button>`,
       () => {
@@ -1021,7 +1104,7 @@
 
   function askCode(wrong) {
     openSheet("Plant code", `<p class="note">Ask Randy for the plant code. You type it once on this phone. It is what keeps the shared sheet private.</p>
-      <div class="f"><label for="plantCode">Plant code</label><input id="plantCode" type="text" autocomplete="off" autocapitalize="off"></div>
+      <div class="f"><label for="plantCode">Plant code</label><input id="plantCode" type="text" autocomplete="on" autocapitalize="off"></div>
       <div class="err" id="formErr">${wrong ? "That code didn't work." : ""}</div>`,
       `<span class="sp"></span><button class="btn primary" type="button" id="codeGo">Continue</button>`,
       () => {
@@ -1071,12 +1154,126 @@
     await commit(result);
   }
 
+  let voiceSession = null;
+  function stopVoiceSession() {
+    if (voiceSession) {
+      try { voiceSession.onend = null; voiceSession.stop(); } catch (e) {}
+      voiceSession = null;
+    }
+    if (window.speechSynthesis) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+  }
+  function speak(text) {
+    if (!window.speechSynthesis || !text) return;
+    try {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "en-US";
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+  function startVoiceWorkOrder(assetId) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { toast("This browser has no speech recognition, so voice work orders stay off. Type one instead."); return; }
+    stopVoiceSession();
+    let phase = "capture";
+    let finals = "";
+    let transcript = "";
+    let parsed = null;
+    let pauseTimer = null;
+    openSheet("Voice work order", `
+      <p class="note" id="voiceHint">Listening. Say the job the way you would to another tech. One tap already started the mic.</p>
+      <p id="voiceHeard" class="prose"></p>
+      <div id="voiceCard"></div>
+      <div class="err" id="formErr" role="alert"></div>`,
+      `<button class="btn" type="button" id="voiceCancel">Cancel</button><span class="sp"></span><button class="btn primary" type="button" id="voiceSave" hidden>Save</button>`,
+      () => {
+        byId("voiceCancel").onclick = () => { stopVoiceSession(); closeSheet(); toast("Discarded."); };
+        byId("voiceSave").onclick = () => saveParsed();
+      });
+    function showParsed(p) {
+      parsed = p;
+      const card = byId("voiceCard");
+      if (!card) return;
+      card.innerHTML = `<article class="panel"><p><b>${esc(p.type)}</b></p>
+        <p>${p.assetTag ? esc(p.assetTag + " " + p.assetName) : "No machine · General"}</p>
+        ${p.location ? `<p>Location ${esc(p.location)}</p>` : ""}
+        <p>${esc(p.description)}</p>
+        <p>Priority ${esc(p.priority)}${p.assignedName ? " · " + esc(p.assignedName) : ""}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
+        <p class="note">Say save, cancel, or change.</p></article>`;
+      const hint = byId("voiceHint");
+      if (hint) hint.textContent = "Say save to create it, cancel to discard, or change and then the correction.";
+      const saveBtn = byId("voiceSave");
+      if (saveBtn) saveBtn.hidden = false;
+      speak(PM.voiceSummary(p));
+    }
+    function saveParsed() {
+      if (!parsed) return;
+      stopVoiceSession();
+      const result = PM.saveWo(state, {
+        type: parsed.type, assetId: parsed.assetId, location: parsed.location,
+        title: parsed.title || parsed.description, description: parsed.description,
+        priority: parsed.priority, assignedTo: parsed.assignedTo, dueDate: parsed.dueDate,
+        status: "open", source: "voice", voiceTranscript: parsed.transcript,
+        openedDate: PM.today(), requestedBy: meName()
+      });
+      commit(result, { hash: result.ok ? "#wo/" + result.woId : "" });
+    }
+    let rec;
+    try { rec = new SR(); } catch (e) { toast("The mic isn't available in this browser. Type the work order instead."); return; }
+    voiceSession = rec;
+    rec.lang = "en-US";
+    rec.interimResults = true;
+    try { rec.continuous = true; } catch (e) {}
+    rec.onresult = ev => {
+      let interim = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const piece = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finals += (finals && !/\s$/.test(finals) ? " " : "") + piece;
+        else interim += piece;
+      }
+      const heard = (finals + " " + interim).replace(/\s+/g, " ").trim();
+      const box = byId("voiceHeard");
+      if (box) box.textContent = heard;
+      if (phase === "capture") {
+        clearTimeout(pauseTimer);
+        if (!finals.trim()) return;
+        pauseTimer = setTimeout(() => {
+          if (phase !== "capture" || !byId("voiceHeard")) return;
+          phase = "confirm";
+          transcript = finals.trim();
+          finals = "";
+          showParsed(PM.parseVoiceWorkOrder(transcript, state, { today: PM.today(), assetId: assetId || "" }));
+        }, 1400);
+      } else if (finals.trim()) {
+        const said = finals.trim();
+        finals = "";
+        const follow = PM.applyVoiceCommand(parsed, said, state, { today: PM.today(), assetId: assetId || "" });
+        if (follow.command === "save") saveParsed();
+        else if (follow.command === "cancel") { stopVoiceSession(); closeSheet(); toast("Discarded."); }
+        else if (follow.command === "change") {
+          transcript = follow.parsed.transcript;
+          showParsed(follow.parsed);
+        }
+      }
+    };
+    rec.onerror = () => { if (byId("voiceHint")) byId("voiceHint").textContent = "The mic stopped. Close this and tap Voice work order to try again."; };
+    rec.onend = () => {
+      if (voiceSession !== rec || !byId("voiceHeard")) return;
+      try { rec.start(); } catch (e) {}
+    };
+    try { rec.start(); }
+    catch (e) { voiceSession = null; toast("The mic isn't available. Type the work order instead."); }
+  }
+
   view.addEventListener("click", e => {
     const btn = e.target.closest("[data-action]");
     if (!btn || !view.contains(btn)) return;
     const action = btn.dataset.action;
     const id = btn.dataset.id || "";
-    if (action === "new-wo") woForm(null, { assetId: id });
+    if (action === "voice-wo") startVoiceWorkOrder(id);
+    else if (action === "new-wo") woForm(null, { assetId: id });
     else if (action === "edit-wo") woForm(PM.woById(state, id));
     else if (action === "complete-wo") completeForm(PM.woById(state, id));
     else if (action === "cancel-wo") confirmCancel(PM.woById(state, id));
