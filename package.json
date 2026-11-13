@@ -2,6 +2,6 @@
   "name": "plant-maintenance",
   "private": true,
   "scripts": {
-    "test": "node --test test/logic.test.js"
+    "test": "node --test test/logic.test.js test/store.test.js"
   }
 }

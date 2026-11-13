@@ -106,7 +106,7 @@ Do this when the crew should all see the same jobs. It takes about 15 minutes. T
 11. Commit that change to `main`. Pages picks it up in a minute or two.
 12. Open the app. It asks for the plant code. Enter it once per phone.
 
-Each phone keeps a copy so the lists come up even on a weak signal. New saves go to the sheet. If the sheet can't be reached, the change stays on that phone and is sent the next time the page can get through. Two people can use parts at the same time: the app sends the change in quantity, not a fresh total, so the second save doesn't put the old count back.
+Each phone keeps a copy so the lists come up even on a weak signal. New saves go to the sheet. If the sheet can't be reached, the page says so, and the change stays on that phone until the sheet answers. A wrong plant code works the same way: the change waits until the right code is entered. It does not disappear. If the sheet refuses a save outright, that one is not retried forever. The page says it was not kept, and later saves can still go through. Two people can use parts at the same time: the app sends the change in quantity, not a fresh total, so the second save doesn't put the old count back. Two phones opening work orders at the same moment get different WO- numbers from the sheet, after the updated script is deployed.
 
 On-hand in the **parts** tab of the sheet is the live count. Change stock from the app (Receive, Use, or Correct the count). You can sort and filter the sheet, but don't rename the tabs or the header row.
 
@@ -129,6 +129,6 @@ On-hand in the **parts** tab of the sheet is the live count. Change stock from t
 ## Later changes
 
 - **New plant code:** edit `ACCESS_CODE`, then **Deploy → Manage deployments → Edit (pencil) → Version: New version → Deploy**. The URL stays the same. Everyone has to enter the new code.
-- **Updating Code.gs:** deploy a new version the same way so the URL does not change.
+- **Updating Code.gs:** paste the new file over the script, put your real plant code back on the `ACCESS_CODE` line (do not leave `CHANGE-ME`), then **Deploy → Manage deployments → Edit (pencil) → Version: New version → Deploy**. The `/exec` URL stays the same. Until you do that, the phones have the page fixes and the sheet keeps running the old script.
 - **Sample data:** with no sheet connected, **More → Reset sample data** puts the practice plant back.
 - **Hiding report fields:** uncheck them on Reports. Check them again to bring them back.

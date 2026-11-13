@@ -242,3 +242,125 @@ test("generate due opens only what is due and skips work already open", () => {
   const again = PM.generateDue(made.state, { today: DAY });
   assert.equal(again.ok, false);
 });
+
+test("a meter PM due exactly now says due now, like a calendar PM", () => {
+  let s = PM.emptyState();
+  s = PM.saveAsset(s, { tag: "HM-1", name: "Hour machine", metered: "yes", meterType: "Hours", meter: 1000, status: "Running" }).state;
+  s = PM.saveLevel(s, { assetId: s.assets[0].id, name: "250 hours", basis: "meter", everyMeter: 250 }).state;
+  s = PM.saveTask(s, {
+    assetId: s.assets[0].id, levelId: s.levels[0].id, name: "Hour service",
+    lastCompletedAt: "2026-10-01", lastMeter: 750
+  }).state;
+  const info = PM.pmInfo(s, s.pmTasks[0], DAY);
+  assert.equal(info.status, "due", info.summary);
+  assert.match(info.summary, /^Due now/);
+  assert.doesNotMatch(info.summary, /over/i);
+
+  s.assets[0].meter = 1000.4;
+  const barely = PM.pmInfo(s, s.pmTasks[0], DAY);
+  assert.equal(barely.status, "due", barely.summary);
+  assert.doesNotMatch(barely.summary, /over/i);
+
+  s.assets[0].meter = 1001;
+  const over = PM.pmInfo(s, s.pmTasks[0], DAY);
+  assert.equal(over.status, "overdue", over.summary);
+  assert.match(over.summary, /1 hrs over/);
+
+  let cal = PM.emptyState();
+  cal = PM.saveAsset(cal, { tag: "CA-1", name: "Calendar machine", metered: "no" }).state;
+  cal = PM.saveLevel(cal, { assetId: cal.assets[0].id, name: "Weekly", basis: "calendar", everyDays: 7 }).state;
+  cal = PM.saveTask(cal, {
+    assetId: cal.assets[0].id, levelId: cal.levels[0].id, name: "Weekly look",
+    lastCompletedAt: PM.addDays(DAY, -7)
+  }).state;
+  const todayDue = PM.pmInfo(cal, cal.pmTasks[0], DAY);
+  assert.equal(todayDue.status, "due", todayDue.summary);
+  assert.match(todayDue.summary, /Due now/);
+  assert.match(todayDue.summary, /due today/);
+});
+
+test("date math accepts a full timestamp and does not throw", () => {
+  assert.equal(PM.addDays("2026-11-12", 1), "2026-11-13");
+  assert.equal(PM.addDays("2026-11-12T15:30:00.000Z", 3), "2026-11-15");
+  assert.equal(PM.addDays("2026-11-12 15:30:00", -1), "2026-11-11");
+  assert.equal(PM.daysBetween("2026-11-01T08:00:00.000Z", "2026-11-12T23:59:00.000Z"), 11);
+  assert.equal(PM.daysBetween("2026-11-12", "2026-11-12T00:00:01"), 0);
+  assert.equal(PM.startOfWeek("2026-11-12T15:30:00.000Z"), PM.startOfWeek("2026-11-12"));
+  assert.equal(PM.addDays("not-a-date", 1), "");
+  assert.equal(Number.isNaN(PM.daysBetween("nope", "2026-11-12")), true);
+  assert.equal(PM.startOfWeek("not-a-date"), "");
+  assert.doesNotThrow(() => PM.addDays("2026-11-12T15:30:00.000Z", 1));
+  assert.doesNotThrow(() => PM.daysBetween("2026-13-40T00:00:00", "also-bad"));
+  assert.doesNotThrow(() => PM.startOfWeek("2026-11-12T15:30:00.000Z"));
+
+  let s = PM.emptyState();
+  s = PM.saveAsset(s, { tag: "HM-2", name: "Hour machine", metered: "yes", meter: 500 }).state;
+  s = PM.saveLevel(s, { assetId: s.assets[0].id, name: "Weekly", basis: "calendar", everyDays: 7 }).state;
+  s = PM.saveTask(s, {
+    assetId: s.assets[0].id, levelId: s.levels[0].id, name: "Dated",
+    lastCompletedAt: "2026-11-01T18:45:00.000Z"
+  }).state;
+  const info = PM.pmInfo(s, s.pmTasks[0], DAY);
+  assert.equal(info.status, "overdue", info.summary);
+  assert.match(info.summary, /4 days over/);
+  s.pmTasks[0].lastCompletedAt = "tomorrow afternoon";
+  const bad = PM.pmInfo(s, s.pmTasks[0], DAY);
+  assert.equal(bad.status, "due", bad.summary);
+  assert.match(bad.summary, /check the last-done date/);
+  assert.doesNotThrow(() => PM.dashboard(s, DAY));
+});
+
+test("big saves split, stock plans stay stable, and a missed sheet is called out", () => {
+  assert.equal(PM.MAX_BATCH, 80);
+  assert.equal(PM.chunkOps([]).length, 0);
+  const eighty = PM.chunkOps(Array.from({ length: 80 }, (_, i) => i));
+  assert.equal(eighty.length, 1);
+  assert.equal(eighty[0].length, 80);
+  const eightyOne = PM.chunkOps(Array.from({ length: 81 }, (_, i) => i));
+  assert.deepEqual(eightyOne.map(c => c.length), [80, 1]);
+
+  const ops = [
+    { op: "set", collection: "parts", id: "p1", data: { _onHandDelta: -2 } },
+    { op: "set", collection: "uses", id: "u1", data: {} },
+    { op: "set", collection: "parts", id: "p1", data: { _onHandDelta: -3 } },
+    { op: "set", collection: "parts", id: "p2", data: { _onHandSet: 4 } }
+  ];
+  const onHandOf = id => (id === "p1" ? 10 : 0);
+  const plan = PM.planPartAbsolutes(ops, onHandOf);
+  assert.equal(plan["0"], 8);
+  assert.equal(plan["1"], undefined);
+  assert.equal(plan["2"], 5);
+  assert.equal(plan["3"], 4);
+  assert.deepEqual(PM.planPartAbsolutes(ops, onHandOf), plan);
+  assert.equal(PM.nextOnHand(999, { _onHandSet: plan["2"] }), 5);
+
+  const offline = PM.syncNotices({ mode: "live", unreachable: true, pending: 2 });
+  assert.equal(offline[0].code, "offline");
+  assert.match(offline[0].text, /Couldn't reach the sheet/);
+  assert.match(offline[0].text, /2 changes/);
+  const auth = PM.syncNotices({ mode: "live", authProblem: true, pending: 1 });
+  assert.match(auth[0].text, /Plant code was not accepted/);
+  assert.match(auth[0].text, /right code/);
+  const waiting = PM.syncNotices({ mode: "live", pending: 1 });
+  assert.equal(waiting[0].code, "pending");
+  assert.match(waiting[0].lead, /1 change waiting/);
+  const rejected = PM.syncNotices({ mode: "live", rejected: "That save was not kept." });
+  assert.equal(rejected[0].text, "That save was not kept.");
+  assert.equal(PM.syncNotices({ mode: "sample", unreachable: true }).length, 0);
+});
+
+test("the sheet script claims a batch before stock changes and keeps the placeholder code", () => {
+  const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert.match(gs, /const ACCESS_CODE = 'CHANGE-ME'/);
+  assert.ok(gs.indexOf("claim-before-apply") < gs.indexOf("apply-after-claim"));
+  assert.match(gs, /function planPartAbsolutes/);
+  assert.match(gs, /function allocateWoNumber/);
+  assert.match(gs, /'WO-' \+ max/);
+  assert.match(gs, /ops\.length > 400/);
+  assert.match(gs, /at most 80 ops/);
+  const applied = gs.match(/applied:\s*\[([^\]]+)\]/);
+  assert.ok(applied);
+  const cols = applied[1].split(",").map(s => s.replace(/['"\s]/g, "")).filter(Boolean);
+  assert.deepEqual(cols.slice(0, 2), ["id", "at"]);
+  assert.ok(cols.includes("body"));
+});

@@ -145,18 +145,37 @@
   async function commit(result, opt) {
     opt = opt || {};
     if (!result || result.ok === false) { showErr((result && result.message) || "Could not save that."); return false; }
+    const previous = state;
     state = result.state;
     const saved = await Store.persist(state, result.ops || []);
-    if (saved.unauthorized) { toast("That plant code was not accepted."); askCode(true); return false; }
+    if (saved.unauthorized) {
+      toast(saved.message || "That plant code was not accepted. This change is saved on this phone and will sync after you enter the right code.");
+      render();
+      askCode(true);
+      return false;
+    }
+    if (saved.rejected) {
+      const fresh = await Store.refresh({ keepNotice: true });
+      if (fresh && fresh.ok && fresh.state) state = fresh.state;
+      else if (!saved.sent) { state = previous; Store.remember(previous); }
+      if (opt.close !== false) closeSheet();
+      render();
+      toast(saved.message || "The sheet rejected that save. It was not kept.");
+      if (fresh && fresh.unauthorized) askCode(true);
+      return false;
+    }
+    let needCode = false;
     if (Store.mode === "live" && saved.ok) {
       const fresh = await Store.refresh();
       if (fresh && fresh.ok && fresh.state) state = fresh.state;
+      else if (fresh && fresh.unauthorized) needCode = true;
     }
     if (opt.close !== false) closeSheet();
     const hash = opt.hash || "";
     if (hash && location.hash !== hash) location.hash = hash;
     render();
     toast((result.message || "Saved.") + (saved.queued ? " Kept on this phone until the sheet answers." : ""));
+    if (needCode) askCode(true);
     return true;
   }
 
@@ -184,9 +203,16 @@
     if (!b) return;
     if (Store.mode === "sample") {
       b.innerHTML = `<div class="banner sample" data-sample="true"><b>Sample data.</b> This is practice data for the Lillington plant, saved only on this phone. The crew will not see changes. Connect a Google Sheet when you want one shared list — the steps are in the README.</div>`;
-    } else if (Store.pending) {
-      b.innerHTML = `<div class="banner warn"><b>${Store.pending} change${Store.pending === 1 ? "" : "s"} waiting.</b> Saved on this phone. They'll sync when the sheet is reachable.</div>`;
-    } else b.innerHTML = "";
+      return;
+    }
+    const notes = PM.syncNotices({
+      mode: Store.mode,
+      pending: Store.pending,
+      unreachable: Store.unreachable,
+      rejected: Store.rejected,
+      authProblem: Store.authProblem
+    });
+    b.innerHTML = notes.map(n => `<div class="banner ${n.kind}" data-sync="${esc(n.code)}">${n.lead ? `<b>${esc(n.lead)}</b> ` : ""}${esc(n.text)}</div>`).join("");
   }
 
   function render() {
@@ -978,7 +1004,7 @@
           Store.saveCode(v);
           closeSheet();
           const fresh = await Store.refresh();
-          if (fresh.unauthorized) { Store.saveCode(""); askCode(true); return; }
+          if (fresh.unauthorized) { Store.saveCode(""); render(); askCode(true); return; }
           if (fresh.ok && fresh.state) { state = fresh.state; toast("Connected to the sheet."); render(); }
           else { toast("Couldn't reach the sheet yet. We'll keep trying."); render(); }
         };
@@ -1061,9 +1087,9 @@
       location.hash = "#home";
       render();
     } else if (action === "sync") {
-      Store.refresh().then(r => {
-        if (r.unauthorized) { askCode(true); return; }
-        if (r.ok && r.state) { state = r.state; toast("Up to date."); render(); }
+      pullSheet({ ask: true, force: true }).then(r => {
+        if (!r || r.unauthorized) return;
+        if (r.ok) toast("Up to date.");
         else toast("Couldn't reach the sheet.");
       });
     }
@@ -1074,22 +1100,36 @@
   document.addEventListener("keydown", e => { if (e.key === "Escape" && byId("scrim")) closeSheet(); });
   window.addEventListener("hashchange", render);
 
+  function sheetStamp() {
+    return [Store.unreachable, Store.authProblem, Store.pending, Store.rejected || ""].join(":");
+  }
+  function pullSheet(opt) {
+    opt = opt || {};
+    const before = sheetStamp();
+    return Store.refresh(opt).then(r => {
+      if (r && r.ok && r.state) state = r.state;
+      if (r && r.unauthorized && opt.ask) askCode(true);
+      if ((r && r.ok && r.state) || sheetStamp() !== before || opt.force) render();
+      return r;
+    });
+  }
+
   const boot = Store.load();
   state = boot.state;
   if (!location.hash) location.replace("#home");
   render();
   if (boot.needsCode) askCode(false);
-  else if (Store.mode === "live") Store.refresh().then(r => { if (r && r.ok && r.state) { state = r.state; render(); } else if (r && r.unauthorized) askCode(true); });
+  else if (Store.mode === "live") pullSheet({ keepNotice: true, ask: true });
 
   setInterval(() => {
     if (Store.mode !== "live" || document.hidden || byId("scrim")) return;
     const ae = document.activeElement;
     if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return;
-    Store.refresh().then(r => { if (r && r.ok && r.state) { state = r.state; render(); } });
+    pullSheet();
   }, 60000);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden || Store.mode !== "live" || byId("scrim")) return;
-    Store.refresh().then(r => { if (r && r.ok && r.state) { state = r.state; render(); } });
+    pullSheet();
   });
   if ("serviceWorker" in navigator && location.protocol !== "file:") {
     navigator.serviceWorker.register("./sw.js").catch(() => {});

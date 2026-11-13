@@ -1,6 +1,7 @@
 /* Plant maintenance domain logic.
-   Shared by the page and the node tests. Code.gs must use the same FIELDS
-   and the same nextOnHand rules, or the sheet and the phones will drift. */
+   Shared by the page and the node tests. Code.gs must use the same FIELDS,
+   the same nextOnHand rules, and the same planPartAbsolutes rules, or the
+   sheet and the phones will drift. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
@@ -29,6 +30,10 @@
     { name: "1000 hours", basis: "meter", everyDays: 0, everyMeter: 1000 }
   ];
 
+  /* One request stays at or under this so the original Apps Script (which
+     rejects more than 80 ops) still accepts a save from an updated phone. */
+  const MAX_BATCH = 80;
+
   const FIELDS = {
     techs: ["id", "name", "role", "phone", "email", "hourlyRate", "active", "notes", "createdAt"],
     assets: ["id", "tag", "name", "area", "type", "make", "model", "year", "serial", "status", "metered", "meterType", "meter", "notes", "createdAt", "updatedAt"],
@@ -50,17 +55,35 @@
   const pad = n => String(n).padStart(2, "0");
   const money = n => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(round2(n) || 0);
   const today = () => { const d = new Date(); return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
+  /* A sheet cell sometimes holds a full timestamp ("2026-11-12T15:30:00" or
+     "2026-11-12 15:30") instead of a plain date. Keep the calendar day in
+     front. A value that is not a date returns null so callers don't throw. */
+  function parseDay(v) {
+    const m = String(v == null ? "" : v).trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (!m) return null;
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const ms = Date.UTC(y, mo - 1, d);
+    return isFinite(ms) ? ms : null;
+  }
   const addDays = (iso, n) => {
-    const [y, m, d] = String(iso).split("-").map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    dt.setUTCDate(dt.getUTCDate() + n);
+    const ms = parseDay(iso);
+    if (ms == null) return "";
+    const dt = new Date(ms);
+    dt.setUTCDate(dt.getUTCDate() + num(n));
     return dt.toISOString().slice(0, 10);
   };
   const daysBetween = (a, b) => {
-    const p = s => { const [y, m, d] = String(s).split("-").map(Number); return Date.UTC(y, m - 1, d); };
-    return Math.round((p(b) - p(a)) / 86400000);
+    const pa = parseDay(a), pb = parseDay(b);
+    if (pa == null || pb == null) return NaN;
+    return Math.round((pb - pa) / 86400000);
   };
-  const startOfWeek = iso => { const [y, m, d] = iso.split("-").map(Number); const day = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); return addDays(iso, day === 0 ? -6 : 1 - day); };
+  const startOfWeek = iso => {
+    const ms = parseDay(iso);
+    if (ms == null) return "";
+    const day = new Date(ms).getUTCDay();
+    return addDays(iso, day === 0 ? -6 : 1 - day);
+  };
   const dayOf = v => String(v || "").slice(0, 10);
   const fmtDate = s => { if (!s) return ""; const [y, m, d] = String(s).split("-").map(Number); if (!y || !m || !d) return String(s); return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); };
   const fmtShort = s => { if (!s) return ""; const [y, m, d] = String(s).split("-").map(Number); if (!y || !m || !d) return String(s); return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
@@ -196,11 +219,14 @@
         else {
           const due = addDays(task.lastCompletedAt, every);
           const left = daysBetween(day, due);
-          considerDate(due);
-          if (left < 0) { status = worse(status, "overdue"); reasons.push(Math.abs(left) + " day" + (left === -1 ? "" : "s") + " over"); }
-          else if (left === 0) { status = worse(status, "due"); reasons.push("due today"); }
-          else if (left <= warnDays(every)) { status = worse(status, "soon"); reasons.push(left + " day" + (left === 1 ? "" : "s") + " left"); }
-          else reasons.push("due " + fmtShort(due));
+          if (!due || !isFinite(left)) { status = worse(status, "due"); reasons.push("check the last-done date"); }
+          else {
+            considerDate(due);
+            if (left < 0) { status = worse(status, "overdue"); reasons.push(Math.abs(left) + " day" + (left === -1 ? "" : "s") + " over"); }
+            else if (left === 0) { status = worse(status, "due"); reasons.push("due today"); }
+            else if (left <= warnDays(every)) { status = worse(status, "soon"); reasons.push(left + " day" + (left === 1 ? "" : "s") + " left"); }
+            else reasons.push("due " + fmtShort(due));
+          }
         }
       }
     }
@@ -216,8 +242,16 @@
           base.dueMeter = dueAt;
           const rate = runRatePerDay(state, asset.id);
           if (left <= 0) {
-            status = worse(status, "overdue");
-            reasons.push(Math.abs(Math.round(left)) + " " + word + " over");
+            /* Exactly on the interval rounds to 0. That is "due now", same as
+               a calendar PM that is due today — not "0 hrs over". */
+            const over = Math.abs(Math.round(left));
+            if (over === 0) {
+              status = worse(status, "due");
+              reasons.push("0 " + word + " left");
+            } else {
+              status = worse(status, "overdue");
+              reasons.push(over + " " + word + " over");
+            }
             if (rate) considerDate(addDays(day, Math.round(left / rate)));
             else considerDate(day);
           } else {
@@ -1038,8 +1072,66 @@
     return list.slice().sort((a, b) => (isOverdueWo(b, day) - isOverdueWo(a, day)) || (priorityRank(a.priority) - priorityRank(b.priority)) || String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")) || String(a.openedDate || "").localeCompare(String(b.openedDate || "")));
   }
 
+  function chunkOps(ops, size) {
+    const n = size || MAX_BATCH;
+    const list = Array.isArray(ops) ? ops : [];
+    const out = [];
+    if (!(n > 0)) return list.length ? [list.slice()] : [];
+    for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+    return out;
+  }
+
+  /* Walk a batch in order and freeze each parts op to the on-hand it should
+     land on. A retry applies those absolutes, so a stock delta cannot run twice.
+     onHandOf(id) is the count before this batch. Code.gs keeps the same rules. */
+  function planPartAbsolutes(ops, onHandOf) {
+    const plan = {};
+    const running = {};
+    (ops || []).forEach((op, i) => {
+      if (!op || op.collection !== "parts" || op.op === "delete") return;
+      if (!Object.prototype.hasOwnProperty.call(running, op.id)) {
+        const cur = onHandOf ? onHandOf(op.id) : 0;
+        running[op.id] = cur;
+      }
+      running[op.id] = nextOnHand(running[op.id], op.data || {});
+      plan[String(i)] = running[op.id];
+    });
+    return plan;
+  }
+
+  /* Banners for a live phone. Sample mode is drawn by the page itself. */
+  function syncNotices(info) {
+    info = info || {};
+    if (info.mode === "sample") return [];
+    const notes = [];
+    const pending = Math.max(0, Math.round(num(info.pending)));
+    if (info.rejected) notes.push({ kind: "bad", code: "rejected", text: String(info.rejected) });
+    if (info.unreachable) {
+      let text = "Couldn't reach the sheet. Showing the last copy saved on this phone.";
+      if (pending > 0) text += " " + pending + " change" + (pending === 1 ? "" : "s") + " will sync when it answers.";
+      notes.push({ kind: "bad", code: "offline", text });
+    } else if (info.authProblem) {
+      notes.push({
+        kind: "warn",
+        code: "auth",
+        text: pending > 0
+          ? "Plant code was not accepted. " + pending + " change" + (pending === 1 ? " is" : "s are") + " saved on this phone and will sync after you enter the right code."
+          : "Plant code was not accepted. Enter the right code and this phone will sync."
+      });
+    } else if (pending > 0) {
+      notes.push({
+        kind: "warn",
+        code: "pending",
+        lead: pending + " change" + (pending === 1 ? "" : "s") + " waiting.",
+        text: "Saved on this phone. They'll sync when the sheet is reachable."
+      });
+    }
+    return notes;
+  }
+
   return {
     STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, ASSET_STATUSES, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
+    MAX_BATCH, chunkOps, planPartAbsolutes, syncNotices,
     num, hasNum, yes, round2, money, pad, today, addDays, daysBetween, startOfWeek, dayOf, fmtDate, fmtShort, uid, clone, inRange, emptyState,
     nextOnHand, techById, assetById, partById, levelById, taskById, woById, isMetered, isActive, meterWord, whoName, priorityRank, isOverdueWo,
     parseParts, stockNote, intervalLabel, runRatePerDay, pmInfo, dueDateFor, woCosts, nextWoNumber,
