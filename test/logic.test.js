@@ -556,6 +556,44 @@ test("voice assignee, urgent, and today", () => {
   assert.equal(friday.dueDate, "");
 });
 
+test("voice names, negation, and today stay literal unless they are the request", () => {
+  let s = sample();
+  s = PM.saveTech(s, { name: "Michael Smith", hourlyRate: 30 }).state;
+  for (const name of ["William Brooks", "Edward Cole", "Jose Hale", "Sean Ellis", "Leah Vasquez", "Frederick Johnson"]) {
+    s = PM.saveTech(s, { name, hourlyRate: 20 }).state;
+  }
+  const today = "2026-11-12";
+  for (const phrase of ["will not start", "hose", "seal", "leak", "ed", "Frederick St"]) {
+    const parsed = PM.parseVoiceWorkOrder("Work order, " + phrase, s, { today });
+    assert.equal(parsed.assignedTo, "", phrase);
+  }
+  const given = PM.parseVoiceWorkOrder("Work order, panel saw, give it to Mike", s, { today });
+  assert.equal(given.assignedName, "Michael Smith");
+  const named = PM.parseVoiceWorkOrder("Work order, panel saw for Randy", s, { today });
+  assert.equal(named.assignedName, "Randy Johnson");
+  for (const phrase of ["not urgent, the saw is loud", "isn't urgent, leave it", "no rush on the saw"]) {
+    const parsed = PM.parseVoiceWorkOrder("Work order, " + phrase, s, { today });
+    assert.equal(parsed.priority, "Normal", phrase);
+    assert.match(parsed.description, new RegExp(phrase.split(",")[0].replace("'", "'"), "i"), phrase);
+  }
+  const alone = PM.parseVoiceWorkOrder("today", s, { today });
+  assert.equal(alone.dueDate, today);
+  const urgentToday = PM.parseVoiceWorkOrder("Work order, panel saw, urgent today", s, { today });
+  assert.equal(urgentToday.priority, "High");
+  assert.equal(urgentToday.dueDate, today);
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, due today", s, { today }).dueDate, today);
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, by tomorrow", s, { today }).dueDate, "2026-11-13");
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, needs done today", s, { today }).dueDate, today);
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, fix the guard today", s, { today }).dueDate, today);
+  for (const phrase of ["broke down today", "started today", "since today", "wait until tomorrow"]) {
+    const parsed = PM.parseVoiceWorkOrder("Work order, the press " + phrase, s, { today });
+    assert.equal(parsed.dueDate, "", phrase);
+    assert.match(parsed.description, /today|tomorrow/, phrase);
+  }
+  const stillFriday = PM.parseVoiceWorkOrder("Work order, panel saw, Friday night shift", s, { today });
+  assert.equal(stillFriday.dueDate, "");
+});
+
 test("a photo that does not fit is refused and a short one is kept whole", () => {
   const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert.equal(PM.acceptPhotoData("").ok, false);

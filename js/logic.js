@@ -1264,7 +1264,23 @@
     if (words.length >= 2 && firstOk(words[0]) && lastOk(words[words.length - 1])) best = Math.max(best, 90);
     return best;
   }
-  /* A tie, or a name that is only a near miss of two people, is not a match. */
+  /* A tie, or a name that is only a near miss of two people, is not a match.
+     Fuzzy nicknames and one-letter slips are only for an explicit assign phrase. */
+  function exactAssignee(techs, words) {
+    const hits = [];
+    for (const t of techs || []) {
+      const parts = String(t.name || "").toLowerCase().split(/[^a-z]+/).filter(Boolean);
+      if (!parts.length) continue;
+      const first = parts[0];
+      const last = parts.length > 1 ? parts[parts.length - 1] : "";
+      if (words.some(w => w === first || (last && w === last))) hits.push(t);
+    }
+    const uniq = [];
+    for (const t of hits) if (!uniq.includes(t)) uniq.push(t);
+    if (uniq.length === 1) return { tech: uniq[0], confident: true };
+    if (uniq.length > 1) return { tech: null, confident: false, tie: true };
+    return { tech: null, confident: false };
+  }
   function matchAssignee(techs, spoken) {
     const words = String(spoken || "").toLowerCase().split(/[^a-z]+/).filter(w => w.length > 1 && !/^(priority|location|area|due|today|tomorrow|high|low|urgent|emergency|asap|normal|please|the|and|to)$/.test(w));
     if (!words.length) return { tech: null, confident: false };
@@ -1305,35 +1321,83 @@
     else if (/\bpreventive\b|\bpm\b/.test(lower)) type = "PM";
     else if (/\bproject\b/.test(lower)) type = "Project";
     let priority = "Normal";
-    let priorityAt = -1;
-    const considerPriority = (index, level) => { if (index >= priorityAt) { priorityAt = index; priority = level; } };
+    let priorityCut = null;
+    const negated = index => /\b(?:not|no|isn'?t|ain'?t)\s+$/.test(lower.slice(Math.max(0, index - 16), index));
+    const takePriority = (index, end, level) => {
+      if (negated(index)) return;
+      priority = level;
+      priorityCut = [index, end];
+    };
     const priWord = { urgent: "High", high: "High", low: "Low", normal: "Normal" };
-    for (const m of lower.matchAll(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/g)) considerPriority(m.index, priWord[m[1]]);
-    for (const m of lower.matchAll(/\b(high|low|normal)\s+priority\b/g)) considerPriority(m.index, priWord[m[1]]);
-    for (const m of lower.matchAll(/\b(urgent|emergency|asap)\b/g)) considerPriority(m.index, "High");
+    for (const m of lower.matchAll(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/g)) takePriority(m.index, m.index + m[0].length, priWord[m[1]]);
+    for (const m of lower.matchAll(/\b(high|low|normal)\s+priority\b/g)) takePriority(m.index, m.index + m[0].length, priWord[m[1]]);
+    for (const m of lower.matchAll(/\b(urgent|emergency|asap)\b/g)) takePriority(m.index, m.index + m[0].length, "High");
     const todayIso = opts.today || today();
     let dueDate = "";
-    let dueAt = -1;
-    const takeDue = (index, word) => { if (index >= dueAt) { dueAt = index; dueDate = dueFromWord(word, todayIso); } };
-    for (const m of lower.matchAll(/\b(today|tomorrow)\b/g)) takeDue(m.index, m[1]);
-    for (const m of lower.matchAll(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/g)) takeDue(m.index, m[1]);
+    let dueCut = null;
+    const takeDue = (index, end, word) => { dueDate = dueFromWord(word, todayIso); dueCut = [index, end]; };
+    const happened = index => /\b(?:until|since|wait|waited|waiting|broke down|broken down|started|happened|failed)\s+$/.test(lower.slice(Math.max(0, index - 24), index));
+    for (const m of lower.matchAll(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/g)) {
+      const wordAt = m.index + m[0].length - m[1].length;
+      if (!happened(wordAt)) takeDue(m.index, m.index + m[0].length, m[1]);
+    }
+    for (const m of lower.matchAll(/\bneeds?\s+done\s+(today|tomorrow)\b/g)) {
+      const wordAt = m.index + m[0].length - m[1].length;
+      if (!happened(wordAt)) takeDue(wordAt, wordAt + m[1].length, m[1]);
+    }
+    for (const m of lower.matchAll(/\b(today|tomorrow)\b/g)) {
+      if (happened(m.index)) continue;
+      const before = lower.slice(0, m.index);
+      const after = lower.slice(m.index + m[0].length);
+      const ownPhrase = /(?:^|[,.;:]\s*)$/.test(before) && /^(?:\s*[,.;:]|\s*$)/.test(after);
+      const atEnd = /^\s*[.!?]*\s*(?:please\s*)?[.!?]*\s*$/.test(after);
+      if (ownPhrase || atEnd) takeDue(m.index, m.index + m[0].length, m[0]);
+    }
     let assignedTo = "", assignedName = "", assigneeNote = "";
-    const who = lastMatch(lower, /\bassign(?:ed)?(?:\s+to)?\s+([a-z][a-z .'-]{1,40})/i);
-    if (who) {
-      const said = tidyPhrase(who[1]).split(/\s+/).filter(w => !/^(priority|location|area|due|today|tomorrow|high|low|urgent|emergency|asap|normal|please)$/.test(w)).slice(0, 3).join(" ");
+    let assignCut = null;
+    const cues = [];
+    for (const m of lower.matchAll(/\bassign(?:ed)?\s+to\s+([a-z]+(?:\s+[a-z]+){0,2})/g)) cues.push({ index: m.index, end: m.index + m[0].length, name: m[1], strict: true });
+    for (const m of lower.matchAll(/\bgive\s+it\s+to\s+([a-z]+(?:\s+[a-z]+){0,2})/g)) cues.push({ index: m.index, end: m.index + m[0].length, name: m[1], strict: true });
+    for (const m of lower.matchAll(/\bfor\s+([a-z]+(?:\s+[a-z]+){0,2})/g)) cues.push({ index: m.index, end: m.index + m[0].length, name: m[1], strict: false });
+    cues.sort((a, b) => a.index - b.index);
+    let cue = null;
+    let cueHit = null;
+    for (let i = cues.length - 1; i >= 0; i--) {
+      const said = cues[i].name.split(/\s+/).filter(w => !/^(priority|location|area|due|today|tomorrow|high|low|urgent|emergency|asap|normal|please|the|and|a)$/.test(w)).slice(0, 3).join(" ");
       const hit = matchAssignee(state.techs, said);
+      if (hit.confident && hit.tech) { cue = cues[i]; cueHit = hit; break; }
+      if (cues[i].strict) { cue = cues[i]; cueHit = hit; break; }
+    }
+    let usedCue = false;
+    if (cue) {
+      const hit = cueHit;
       if (hit.confident && hit.tech) {
         assignedTo = hit.tech.id;
         assignedName = hit.tech.name;
         assigneeNote = "Assigned to " + hit.tech.name + ", right?";
-      } else assigneeNote = "No confident match for the assignee. Leaving it unassigned.";
-    } else {
-      const hit = matchAssignee(state.techs, text);
-      if (hit.confident && hit.tech) {
-        assignedTo = hit.tech.id;
-        assignedName = hit.tech.name;
-        assigneeNote = "Assigned to " + hit.tech.name + ", right?";
+        assignCut = [cue.index, cue.end];
+        usedCue = true;
+      } else if (cue.strict) {
+        assigneeNote = "No confident match for the assignee. Leaving it unassigned.";
+        assignCut = [cue.index, cue.end];
+        usedCue = true;
       }
+    }
+    if (!usedCue) {
+      const tokens = [];
+      for (const m of lower.matchAll(/[a-z]+/g)) tokens.push({ w: m[0], i: m.index });
+      const place = new Set(["st", "street", "rd", "road", "ave", "avenue", "dr", "drive", "blvd"]);
+      const words = [];
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i + 1] && place.has(tokens[i + 1].w)) continue;
+        words.push(tokens[i].w);
+      }
+      const hit = exactAssignee(state.techs, words);
+      if (hit.confident && hit.tech) {
+        assignedTo = hit.tech.id;
+        assignedName = hit.tech.name;
+        assigneeNote = "Assigned to " + hit.tech.name + ", right?";
+      } else if (hit.tie) assigneeNote = "No confident match for the assignee. Leaving it unassigned.";
     }
     let location = "";
     const loc = lastMatch(lower, /\b(?:location|area)\s+(?:is\s+|to\s+)?([a-z0-9][a-z0-9 .'-]{0,60})/i);
@@ -1343,15 +1407,22 @@
       asset = fuzzyAsset(state.assets, text);
       if (!asset && opts.assetId) asset = assetById(state, opts.assetId);
     }
-    let description = text
+    const cuts = [];
+    if (priorityCut) cuts.push(priorityCut);
+    if (dueCut) cuts.push(dueCut);
+    if (assignCut) cuts.push(assignCut);
+    if (loc) cuts.push([loc.index, loc.index + loc[0].length]);
+    cuts.sort((a, b) => a[0] - b[0]);
+    let description = "";
+    let cursor = 0;
+    for (const [start, end] of cuts) {
+      if (start < cursor) continue;
+      description += text.slice(cursor, start);
+      cursor = end;
+    }
+    description += text.slice(cursor);
+    description = description
       .replace(/^\s*(work order|general task|plant task|general\s*\/\s*plant task)\s*,?\s*/i, "")
-      .replace(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/ig, "")
-      .replace(/\b(high|low|normal)\s+priority\b/ig, "")
-      .replace(/\b(urgent|emergency|asap)\b/ig, "")
-      .replace(/\bassign(?:ed)?(?:\s+to)?\s+[a-z][a-z .'-]{1,40}/ig, "")
-      .replace(/\b(?:location|area)\s+(?:is\s+|to\s+)?[a-z0-9][a-z0-9 .'-]{0,60}/ig, "")
-      .replace(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, "")
-      .replace(/\b(today|tomorrow)\b/ig, "")
       .replace(/\s+,/g, ",").replace(/^[,\s]+|[,\s]+$/g, "").replace(/\s{2,}/g, " ").trim();
     if (!description) description = text;
     const title = description.split(/[.]/)[0].slice(0, 80);
