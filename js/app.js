@@ -1212,8 +1212,11 @@
         ${p.location ? `<p>Location ${esc(p.location)}</p>` : ""}
         <p>${esc(p.description)}</p>
         <p>Priority ${esc(p.priority || "Normal")}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
+        ${p.suggestedId ? `<button class="btn" type="button" id="voiceSuggest">Assign to ${esc(p.suggestedName)}?</button>` : ""}
         ${p.assigneeNote ? `<p>${esc(p.assigneeNote)}</p>` : ""}
         <p class="note">Say save, cancel, or change.</p></article>`;
+      const suggest = byId("voiceSuggest");
+      if (suggest) suggest.onclick = () => showParsed(PM.acceptAssigneeSuggestion(parsed));
       const hint = byId("voiceHint");
       if (hint) hint.textContent = "Say save to create it, cancel to discard, or change and then the correction.";
       const saveBtn = byId("voiceSave");
@@ -1264,7 +1267,8 @@
         const said = finals.trim();
         finals = "";
         const follow = PM.applyVoiceCommand(parsed, said, state, { today: PM.today(), assetId: assetId || "" });
-        if (follow.command === "save") saveParsed();
+        if (follow.command === "accept") showParsed(follow.parsed);
+        else if (follow.command === "save") saveParsed();
         else if (follow.command === "cancel") { stopVoiceSession(); closeSheet(); toast("Discarded."); }
         else if (follow.command === "change") {
           transcript = follow.parsed.transcript;
