@@ -1201,24 +1201,120 @@
     }
     return bestScore >= 2 ? best : null;
   }
-  function fuzzyTech(techs, spoken) {
-    const q = String(spoken || "").toLowerCase().trim();
-    if (!q) return null;
-    let best = null, bestScore = 0;
-    for (const t of techs || []) {
-      const name = String(t.name || "").toLowerCase();
-      if (!name) continue;
-      let score = 0;
-      if (name === q) score = 10;
-      else if (name.startsWith(q + " ") || name.split(" ")[0] === q) score = 6;
-      else if (name.includes(q)) score = 4;
-      else {
-        const hits = wordsOf(q).filter(w => name.includes(w)).length;
-        if (hits) score = hits;
+  const TECH_NICKS = {
+    mike: ["michael"], michael: ["mike", "mikey"], mikey: ["michael"],
+    bob: ["robert"], rob: ["robert"], bobby: ["robert"], robert: ["bob", "rob"],
+    bill: ["william"], billy: ["william"], will: ["william"], william: ["bill", "will"],
+    jim: ["james"], jimmy: ["james"], james: ["jim"],
+    rick: ["richard"], rich: ["richard"], richard: ["rick"],
+    joe: ["joseph"], joseph: ["joe"],
+    dave: ["david"], david: ["dave"],
+    dan: ["daniel"], danny: ["daniel"], daniel: ["dan"],
+    chris: ["christopher"], christopher: ["chris"],
+    matt: ["matthew"], matthew: ["matt"],
+    tony: ["anthony"], anthony: ["tony"],
+    steve: ["steven", "stephen"], steven: ["steve"], stephen: ["steve"],
+    tom: ["thomas"], thomas: ["tom"],
+    chuck: ["charles"], charlie: ["charles"], charles: ["chuck", "charlie"],
+    ed: ["edward"], eddie: ["edward"], edward: ["ed"],
+    pat: ["patrick"], patrick: ["pat"],
+    randy: ["randall"], randall: ["randy"],
+    fred: ["frederick"], frederick: ["fred", "freddy"], freddy: ["frederick"],
+    liz: ["elizabeth"], beth: ["elizabeth"], elizabeth: ["liz"],
+    jen: ["jennifer"], jennifer: ["jen"]
+  };
+  function editDistance(a, b) {
+    if (a === b) return 0;
+    if (Math.abs(a.length - b.length) > 2) return 3;
+    const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      let prev = i - 1;
+      row[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const cur = row[j];
+        row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+        prev = cur;
       }
-      if (score > bestScore) { best = t; bestScore = score; }
     }
-    return bestScore >= 1 ? best : null;
+    return row[b.length];
+  }
+  function samePerson(spoken, name) {
+    if (!spoken || !name) return false;
+    if (spoken === name) return true;
+    return (TECH_NICKS[spoken] || []).includes(name) || (TECH_NICKS[name] || []).includes(spoken);
+  }
+  function scoreTech(tech, words) {
+    const parts = String(tech.name || "").toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    if (!parts.length || !words.length) return 0;
+    const first = parts[0];
+    const last = parts.length > 1 ? parts[parts.length - 1] : "";
+    const full = parts.join(" ");
+    const spoken = words.join(" ");
+    if (spoken === full) return 100;
+    let best = 0;
+    const firstOk = w => samePerson(w, first) || (first.length >= 4 && w.length >= 4 && editDistance(w, first) === 1);
+    const lastOk = w => last && (w === last || (last.length >= 4 && w.length >= 4 && editDistance(w, last) === 1));
+    for (const word of words) {
+      if (word.length < 2) continue;
+      if (word === first) best = Math.max(best, 80);
+      else if (samePerson(word, first)) best = Math.max(best, 75);
+      else if (first.length >= 4 && word.length >= 4 && editDistance(word, first) === 1) best = Math.max(best, 60);
+      if (last && word === last) best = Math.max(best, 70);
+      else if (last && last.length >= 4 && word.length >= 4 && editDistance(word, last) === 1) best = Math.max(best, 55);
+    }
+    if (words.length >= 2 && firstOk(words[0]) && lastOk(words[words.length - 1])) best = Math.max(best, 90);
+    return best;
+  }
+  /* A tie, or a name that is only a near miss of two people, is not a match.
+     Fuzzy nicknames and one-letter slips are only for an explicit assign phrase. */
+  function exactAssignee(techs, words) {
+    const hits = [];
+    for (const t of techs || []) {
+      const parts = String(t.name || "").toLowerCase().split(/[^a-z]+/).filter(Boolean);
+      if (!parts.length) continue;
+      const first = parts[0];
+      const last = parts.length > 1 ? parts[parts.length - 1] : "";
+      if (words.some(w => w === first || (last && w === last))) hits.push(t);
+    }
+    const uniq = [];
+    for (const t of hits) if (!uniq.includes(t)) uniq.push(t);
+    if (uniq.length === 1) return { tech: uniq[0], confident: true };
+    if (uniq.length > 1) return { tech: null, confident: false, tie: true };
+    return { tech: null, confident: false };
+  }
+  function matchAssignee(techs, spoken) {
+    const words = String(spoken || "").toLowerCase().split(/[^a-z]+/).filter(w => w.length > 1 && !/^(priority|location|area|due|today|tomorrow|high|low|urgent|emergency|asap|normal|please|the|and|to)$/.test(w));
+    if (!words.length) return { tech: null, confident: false };
+    const scored = (techs || []).map(t => ({ t, score: scoreTech(t, words) })).filter(x => x.score >= 55);
+    if (!scored.length) return { tech: null, confident: false };
+    scored.sort((a, b) => b.score - a.score || String(a.t.name).localeCompare(String(b.t.name)));
+    if (scored.length > 1 && scored[1].score === scored[0].score) return { tech: null, confident: false, tie: true };
+    return { tech: scored[0].t, confident: true };
+  }
+  /* After "for", only an exact first name, full name, or a listed nickname. No one-letter slips. */
+  function matchRosterName(techs, spoken) {
+    const words = String(spoken || "").toLowerCase().split(/[^a-z]+/).filter(w => w.length > 1 && !/^(the|and|a|to|for)$/.test(w));
+    if (!words.length) return { tech: null, confident: false };
+    const scored = [];
+    for (const t of techs || []) {
+      const parts = String(t.name || "").toLowerCase().split(/[^a-z]+/).filter(Boolean);
+      if (!parts.length) continue;
+      const first = parts[0];
+      const last = parts.length > 1 ? parts[parts.length - 1] : "";
+      const full = parts.join(" ");
+      const said = words.join(" ");
+      let score = 0;
+      if (said === full) score = 100;
+      else if (words.length === 1 && words[0] === first) score = 80;
+      else if (words.length === 1 && last && words[0] === last) score = 70;
+      else if (words.length === 1 && samePerson(words[0], first)) score = 75;
+      else if (words.length === 2 && samePerson(words[0], first) && words[1] === last) score = 90;
+      if (score) scored.push({ t, score });
+    }
+    if (!scored.length) return { tech: null, confident: false };
+    scored.sort((a, b) => b.score - a.score || String(a.t.name).localeCompare(String(b.t.name)));
+    if (scored.length > 1 && scored[1].score === scored[0].score) return { tech: null, confident: false, tie: true };
+    return { tech: scored[0].t, confident: true };
   }
   function lastMatch(text, re) {
     let m, last = null;
@@ -1228,6 +1324,17 @@
   }
   function tidyPhrase(s) {
     return String(s || "").replace(/[.,]+$/g, "").replace(/\s+/g, " ").trim();
+  }
+  function dueFromWord(word, todayIso) {
+    const name = String(word || "").toLowerCase();
+    if (name === "today") return todayIso;
+    if (name === "tomorrow") return addDays(todayIso, 1);
+    const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const target = names.indexOf(name);
+    if (target < 0) return "";
+    const ms = parseDay(todayIso);
+    const cur = ms == null ? 0 : new Date(ms).getUTCDay();
+    return addDays(todayIso, (target - cur + 7) % 7);
   }
   function parseVoiceWorkOrder(transcript, state, opts) {
     opts = opts || {};
@@ -1240,28 +1347,89 @@
     else if (/\bpreventive\b|\bpm\b/.test(lower)) type = "PM";
     else if (/\bproject\b/.test(lower)) type = "Project";
     let priority = "Normal";
-    const pri = lastMatch(lower, /\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/i);
-    if (pri) priority = pri[1].charAt(0).toUpperCase() + pri[1].slice(1);
+    let priorityCut = null;
+    const negated = index => /\b(?:not|no|isn'?t|ain'?t)\s+$/.test(lower.slice(Math.max(0, index - 16), index));
+    const takePriority = (index, end, level) => {
+      if (negated(index)) return;
+      priority = level;
+      priorityCut = [index, end];
+    };
+    const priWord = { urgent: "High", high: "High", low: "Low", normal: "Normal" };
+    for (const m of lower.matchAll(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/g)) takePriority(m.index, m.index + m[0].length, priWord[m[1]]);
+    for (const m of lower.matchAll(/\b(high|low|normal)\s+priority\b/g)) takePriority(m.index, m.index + m[0].length, priWord[m[1]]);
+    for (const m of lower.matchAll(/\b(urgent|emergency|asap)\b/g)) takePriority(m.index, m.index + m[0].length, "High");
     const todayIso = opts.today || today();
     let dueDate = "";
-    const dueWord = lastMatch(lower, /\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
-    if (dueWord) {
-      const word = dueWord[1].toLowerCase();
-      if (word === "today") dueDate = todayIso;
-      else if (word === "tomorrow") dueDate = addDays(todayIso, 1);
-      else {
-        const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-        const ms = parseDay(todayIso);
-        const cur = ms == null ? 0 : new Date(ms).getUTCDay();
-        const target = names.indexOf(word);
-        dueDate = addDays(todayIso, (target - cur + 7) % 7);
+    let dueCut = null;
+    const takeDue = (index, end, word) => { dueDate = dueFromWord(word, todayIso); dueCut = [index, end]; };
+    const happened = index => /\b(?:until|since|wait(?:ed|ing)?|broke(?:\s+down)?|broken down|went down|quit(?:\s+working)?|started|happened|failed|stopped|died|tripped)\s+$/.test(lower.slice(Math.max(0, index - 32), index));
+    for (const m of lower.matchAll(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/g)) {
+      const wordAt = m.index + m[0].length - m[1].length;
+      if (!happened(wordAt)) takeDue(m.index, m.index + m[0].length, m[1]);
+    }
+    for (const m of lower.matchAll(/\bneeds?\s+done\s+(today|tomorrow)\b/g)) {
+      const wordAt = m.index + m[0].length - m[1].length;
+      if (!happened(wordAt)) takeDue(wordAt, wordAt + m[1].length, m[1]);
+    }
+    for (const m of lower.matchAll(/\b(today|tomorrow)\b/g)) {
+      if (happened(m.index)) continue;
+      const before = lower.slice(0, m.index);
+      const after = lower.slice(m.index + m[0].length);
+      const ownPhrase = /(?:^|[,.;:]\s*)$/.test(before) && /^(?:\s*[,.;:]|\s*$)/.test(after);
+      const atEnd = /^\s*[.!?]*\s*(?:please\s*)?[.!?]*\s*$/.test(after);
+      if (ownPhrase || atEnd) takeDue(m.index, m.index + m[0].length, m[0]);
+    }
+    let assignedTo = "", assignedName = "", assigneeNote = "", suggestedId = "", suggestedName = "";
+    let assignCut = null;
+    const cues = [];
+    for (const m of lower.matchAll(/\bassign(?:ed)?\s+to\s+([a-z]+(?:\s+[a-z]+){0,2})/g)) cues.push({ index: m.index, end: m.index + m[0].length, name: m[1], strict: true });
+    for (const m of lower.matchAll(/\bgive\s+it\s+to\s+([a-z]+(?:\s+[a-z]+){0,2})/g)) cues.push({ index: m.index, end: m.index + m[0].length, name: m[1], strict: true });
+    for (const m of lower.matchAll(/\bfor\s+([a-z]+(?:\s+[a-z]+){0,2})/g)) {
+      const before = lower.slice(Math.max(0, m.index - 16), m.index);
+      const after = lower.slice(m.index + m[0].length);
+      if (/\b(?:wait|waiting|waited)\s+$/.test(before)) continue;
+      if (/^'s\b/.test(after)) continue;
+      cues.push({ index: m.index, end: m.index + m[0].length, name: m[1], strict: false, kind: "for" });
+    }
+    cues.sort((a, b) => a.index - b.index);
+    let cue = null;
+    let cueHit = null;
+    for (let i = cues.length - 1; i >= 0; i--) {
+      const said = cues[i].name.split(/\s+/).filter(w => !/^(priority|location|area|due|today|tomorrow|high|low|urgent|emergency|asap|normal|please|the|and|a)$/.test(w)).slice(0, 3).join(" ");
+      const hit = cues[i].kind === "for" ? matchRosterName(state.techs, said) : matchAssignee(state.techs, said);
+      if (hit.confident && hit.tech) { cue = cues[i]; cueHit = hit; break; }
+      if (cues[i].strict) { cue = cues[i]; cueHit = hit; break; }
+    }
+    let usedCue = false;
+    if (cue) {
+      const hit = cueHit;
+      if (hit.confident && hit.tech) {
+        assignedTo = hit.tech.id;
+        assignedName = hit.tech.name;
+        assigneeNote = "Assigned to " + hit.tech.name + ", right?";
+        assignCut = [cue.index, cue.end];
+        usedCue = true;
+      } else if (cue.strict) {
+        assigneeNote = "No confident match for the assignee. Leaving it unassigned.";
+        assignCut = [cue.index, cue.end];
+        usedCue = true;
       }
     }
-    let assignedTo = "", assignedName = "";
-    const who = lastMatch(lower, /\bassign(?:ed)?\s+to\s+([a-z][a-z .'-]{1,40})/i);
-    if (who) {
-      const tech = fuzzyTech(state.techs, tidyPhrase(who[1]).split(/\s+/).filter(w => !/^(priority|location|area|due|today|tomorrow|high|low|urgent|normal)$/.test(w)).slice(0, 3).join(" "));
-      if (tech) { assignedTo = tech.id; assignedName = tech.name; }
+    if (!usedCue) {
+      const tokens = [];
+      for (const m of lower.matchAll(/[a-z]+/g)) tokens.push({ w: m[0], i: m.index });
+      const place = new Set(["st", "street", "rd", "road", "ave", "avenue", "dr", "drive", "blvd"]);
+      const words = [];
+      for (let i = 0; i < tokens.length; i++) {
+        if (tokens[i + 1] && place.has(tokens[i + 1].w)) continue;
+        words.push(tokens[i].w);
+      }
+      const hit = exactAssignee(state.techs, words);
+      if (hit.confident && hit.tech) {
+        suggestedId = hit.tech.id;
+        suggestedName = hit.tech.name;
+        assigneeNote = "Assign to " + hit.tech.name + "?";
+      }
     }
     let location = "";
     const loc = lastMatch(lower, /\b(?:location|area)\s+(?:is\s+|to\s+)?([a-z0-9][a-z0-9 .'-]{0,60})/i);
@@ -1271,12 +1439,22 @@
       asset = fuzzyAsset(state.assets, text);
       if (!asset && opts.assetId) asset = assetById(state, opts.assetId);
     }
-    let description = text
+    const cuts = [];
+    if (priorityCut) cuts.push(priorityCut);
+    if (dueCut) cuts.push(dueCut);
+    if (assignCut) cuts.push(assignCut);
+    if (loc) cuts.push([loc.index, loc.index + loc[0].length]);
+    cuts.sort((a, b) => a[0] - b[0]);
+    let description = "";
+    let cursor = 0;
+    for (const [start, end] of cuts) {
+      if (start < cursor) continue;
+      description += text.slice(cursor, start);
+      cursor = end;
+    }
+    description += text.slice(cursor);
+    description = description
       .replace(/^\s*(work order|general task|plant task|general\s*\/\s*plant task)\s*,?\s*/i, "")
-      .replace(/\bpriority(?:\s+to)?\s+(urgent|high|low|normal)\b/ig, "")
-      .replace(/\bassign(?:ed)?\s+to\s+[a-z][a-z .'-]{1,40}/ig, "")
-      .replace(/\b(?:location|area)\s+(?:is\s+|to\s+)?[a-z0-9][a-z0-9 .'-]{0,60}/ig, "")
-      .replace(/\b(?:due|by)\s+(?:on\s+)?(today|tomorrow|sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/ig, "")
       .replace(/\s+,/g, ",").replace(/^[,\s]+|[,\s]+$/g, "").replace(/\s{2,}/g, " ").trim();
     if (!description) description = text;
     const title = description.split(/[.]/)[0].slice(0, 80);
@@ -1284,7 +1462,8 @@
       type, priority, dueDate, assignedTo, assignedName, location,
       assetId: asset ? asset.id : "", assetTag: asset ? asset.tag : "", assetName: asset ? asset.name : "",
       title, description, transcript: text,
-      needsAsset: type !== GENERAL_TYPE && !asset
+      needsAsset: type !== GENERAL_TYPE && !asset,
+      assigneeNote, suggestedId, suggestedName
     };
   }
   function voiceSaveFields(parsed, chosenAssetId) {
@@ -1304,8 +1483,34 @@
       voiceTranscript: parsed.transcript || ""
     };
   }
+  function acceptAssigneeSuggestion(parsed) {
+    parsed = parsed || {};
+    if (!parsed.suggestedId) return parsed;
+    return Object.assign({}, parsed, {
+      assignedTo: parsed.suggestedId,
+      assignedName: parsed.suggestedName,
+      assigneeNote: "Assigned to " + parsed.suggestedName + ", right?",
+      suggestedId: "",
+      suggestedName: ""
+    });
+  }
+  function declineAssigneeSuggestion(parsed) {
+    parsed = parsed || {};
+    return Object.assign({}, parsed, {
+      assignedTo: "",
+      assignedName: "",
+      suggestedId: "",
+      suggestedName: "",
+      assigneeNote: "Unassigned."
+    });
+  }
   function applyVoiceCommand(parsed, utterance, state, opts) {
     const command = voiceCommand(utterance);
+    const u = String(utterance || "").toLowerCase().trim().replace(/[.!?]+$/g, "");
+    const pending = !!(parsed && parsed.suggestedId && !parsed.assignedTo);
+    if (pending && /^(yes|yeah|yep)$/.test(u)) return { command: "accept", parsed: acceptAssigneeSuggestion(parsed) };
+    if (pending && /^(no|nope)$/.test(u)) return { command: "decline", parsed: declineAssigneeSuggestion(parsed) };
+    if (pending && command === "save") return { command: "reprompt", parsed };
     if (command !== "change") return { command, parsed: parsed || null };
     const extra = String(utterance || "").replace(/^\s*change\s+(?:it\s+)?(?:to\s+)?/i, "");
     const next = parseVoiceWorkOrder((((parsed && parsed.transcript) || "") + " " + extra).trim(), state, opts || {});
@@ -1326,10 +1531,10 @@
     else bits.push("no machine yet");
     if (parsed.location) bits.push("location " + parsed.location);
     if (parsed.description) bits.push(parsed.description);
-    if (parsed.priority && parsed.priority !== "Normal") bits.push("priority " + parsed.priority);
-    if (parsed.assignedName) bits.push("assigned to " + parsed.assignedName);
+    bits.push("priority " + (parsed.priority || "Normal"));
+    if (parsed.assigneeNote) bits.push(parsed.assigneeNote);
     if (parsed.dueDate) bits.push("due " + parsed.dueDate);
-    bits.push("Say save, cancel, or change.");
+    bits.push(parsed.suggestedId ? "Say yes or no." : "Say save, cancel, or change.");
     return bits.join(". ");
   }
 
@@ -1401,6 +1606,6 @@
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
     generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
     PHOTO_MAX, acceptPhotoData, sensorAlertDue, sensorShouldStore, sensorAlertPlan, meterReadingOk, recentSensorLogs,
-    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, voiceSaveFields, voiceSummary
+    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, acceptAssigneeSuggestion, declineAssigneeSuggestion, voiceSaveFields, voiceSummary
   };
 });

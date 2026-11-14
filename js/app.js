@@ -1211,16 +1211,25 @@
         ${askMachine ? `<div class="f"><label for="voiceAsset">Which machine?</label>${sel("voiceAsset", "", assetChoices("No machine — save as General"))}<p class="hint">Leave this blank and Save stores it as a General / plant task.</p></div>` : ""}
         ${p.location ? `<p>Location ${esc(p.location)}</p>` : ""}
         <p>${esc(p.description)}</p>
-        <p>Priority ${esc(p.priority)}${p.assignedName ? " · " + esc(p.assignedName) : ""}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
-        <p class="note">Say save, cancel, or change.</p></article>`;
+        <p>Priority ${esc(p.priority || "Normal")}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
+        ${p.assigneeNote ? `<p>${esc(p.assigneeNote)}</p>` : ""}
+        ${p.suggestedId ? `<div class="actions"><button class="btn primary" type="button" id="voiceYes">Yes</button><button class="btn" type="button" id="voiceNo">No</button></div>` : ""}
+        <p class="note">${p.suggestedId ? "Say yes or no." : "Say save, cancel, or change."}</p></article>`;
+      const yesBtn = byId("voiceYes");
+      const noBtn = byId("voiceNo");
+      if (yesBtn) yesBtn.onclick = () => showParsed(PM.acceptAssigneeSuggestion(parsed));
+      if (noBtn) noBtn.onclick = () => showParsed(PM.declineAssigneeSuggestion(parsed));
       const hint = byId("voiceHint");
-      if (hint) hint.textContent = "Say save to create it, cancel to discard, or change and then the correction.";
+      if (hint) hint.textContent = p.suggestedId ? "Say yes or no." : "Say save to create it, cancel to discard, or change and then the correction.";
       const saveBtn = byId("voiceSave");
-      if (saveBtn) saveBtn.hidden = false;
+      if (saveBtn) {
+        saveBtn.hidden = !!p.suggestedId;
+        saveBtn.disabled = !!p.suggestedId;
+      }
       speak(PM.voiceSummary(p));
     }
     function saveParsed() {
-      if (!parsed) return;
+      if (!parsed || parsed.suggestedId) return;
       const chosen = byId("voiceAsset") ? byId("voiceAsset").value : "";
       const fields = PM.voiceSaveFields(parsed, chosen);
       stopVoiceSession();
@@ -1263,7 +1272,9 @@
         const said = finals.trim();
         finals = "";
         const follow = PM.applyVoiceCommand(parsed, said, state, { today: PM.today(), assetId: assetId || "" });
-        if (follow.command === "save") saveParsed();
+        if (follow.command === "accept" || follow.command === "decline") showParsed(follow.parsed);
+        else if (follow.command === "reprompt") speak(PM.voiceSummary(parsed));
+        else if (follow.command === "save") saveParsed();
         else if (follow.command === "cancel") { stopVoiceSession(); closeSheet(); toast("Discarded."); }
         else if (follow.command === "change") {
           transcript = follow.parsed.transcript;

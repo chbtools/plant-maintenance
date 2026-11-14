@@ -521,6 +521,143 @@ test("voice work order parses several phrasings, including a general task", () =
   assert.match(PM.voiceSummary(general), /no machine/i);
 });
 
+test("voice assignee, urgent, and today", () => {
+  let s = sample();
+  s = PM.saveTech(s, { name: "Michael Smith", hourlyRate: 30 }).state;
+  s = PM.saveTech(s, { name: "Jordan Hale", hourlyRate: 30 }).state;
+  const today = "2026-11-12";
+  const mike = PM.parseVoiceWorkOrder("Work order, panel saw, blade is dull, assign to Mike", s, { today });
+  assert.equal(mike.assignedName, "Michael Smith");
+  assert.equal(mike.assigneeNote, "Assigned to Michael Smith, right?");
+  assert.match(PM.voiceSummary(mike), /Assigned to Michael Smith, right\?/);
+  const heard = PM.parseVoiceWorkOrder("Work order, panel saw, assign to Elana", s, { today });
+  assert.equal(heard.assignedName, "Elena Vasquez");
+  const tie = PM.parseVoiceWorkOrder("Work order, panel saw, assign to Jordan", s, { today });
+  assert.equal(tie.assignedTo, "");
+  assert.match(tie.assigneeNote, /No confident match/);
+  assert.match(PM.voiceSummary(tie), /unassigned/);
+  const none = PM.parseVoiceWorkOrder("Work order, panel saw, assign to Zzzzz", s, { today });
+  assert.equal(none.assignedTo, "");
+  const urgent = PM.parseVoiceWorkOrder("Work order, panel saw, emergency leak today", s, { today });
+  assert.equal(urgent.priority, "High");
+  assert.equal(urgent.dueDate, today);
+  assert.match(PM.voiceSummary(urgent), /priority High/);
+  assert.match(PM.voiceSummary(urgent), /location|priority High/);
+  assert.match(PM.voiceSummary(urgent), /due 2026-11-12/);
+  const asap = PM.parseVoiceWorkOrder("Work order, panel saw, ASAP tomorrow", s, { today });
+  assert.equal(asap.priority, "High");
+  assert.equal(asap.dueDate, "2026-11-13");
+  const low = PM.parseVoiceWorkOrder("Work order, panel saw, priority low, location yard", s, { today });
+  assert.equal(low.priority, "Low");
+  assert.match(low.location, /yard/i);
+  assert.match(PM.voiceSummary(low), /location yard/i);
+  assert.match(PM.voiceSummary(low), /priority Low/);
+  const friday = PM.parseVoiceWorkOrder("Work order, panel saw, Friday night shift", s, { today });
+  assert.equal(friday.dueDate, "");
+});
+
+test("voice names, negation, and today stay literal unless they are the request", () => {
+  let s = sample();
+  s = PM.saveTech(s, { name: "Michael Smith", hourlyRate: 30 }).state;
+  for (const name of ["William Brooks", "Edward Cole", "Jose Hale", "Sean Ellis", "Leah Vasquez", "Frederick Johnson"]) {
+    s = PM.saveTech(s, { name, hourlyRate: 20 }).state;
+  }
+  const today = "2026-11-12";
+  for (const phrase of ["will not start", "hose", "seal", "leak", "ed", "Frederick St"]) {
+    const parsed = PM.parseVoiceWorkOrder("Work order, " + phrase, s, { today });
+    assert.equal(parsed.assignedTo, "", phrase);
+  }
+  const given = PM.parseVoiceWorkOrder("Work order, panel saw, give it to Mike", s, { today });
+  assert.equal(given.assignedName, "Michael Smith");
+  const named = PM.parseVoiceWorkOrder("Work order, panel saw for Randy", s, { today });
+  assert.equal(named.assignedName, "Randy Johnson");
+  for (const phrase of ["not urgent, the saw is loud", "isn't urgent, leave it", "no rush on the saw"]) {
+    const parsed = PM.parseVoiceWorkOrder("Work order, " + phrase, s, { today });
+    assert.equal(parsed.priority, "Normal", phrase);
+    assert.match(parsed.description, new RegExp(phrase.split(",")[0].replace("'", "'"), "i"), phrase);
+  }
+  const alone = PM.parseVoiceWorkOrder("today", s, { today });
+  assert.equal(alone.dueDate, today);
+  const urgentToday = PM.parseVoiceWorkOrder("Work order, panel saw, urgent today", s, { today });
+  assert.equal(urgentToday.priority, "High");
+  assert.equal(urgentToday.dueDate, today);
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, due today", s, { today }).dueDate, today);
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, by tomorrow", s, { today }).dueDate, "2026-11-13");
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, needs done today", s, { today }).dueDate, today);
+  assert.equal(PM.parseVoiceWorkOrder("Work order, panel saw, fix the guard today", s, { today }).dueDate, today);
+  for (const phrase of ["broke down today", "started today", "since today", "wait until tomorrow"]) {
+    const parsed = PM.parseVoiceWorkOrder("Work order, the press " + phrase, s, { today });
+    assert.equal(parsed.dueDate, "", phrase);
+    assert.match(parsed.description, /today|tomorrow/, phrase);
+  }
+  const stillFriday = PM.parseVoiceWorkOrder("Work order, panel saw, Friday night shift", s, { today });
+  assert.equal(stillFriday.dueDate, "");
+  const stopped = PM.parseVoiceWorkOrder("Work order, the line stopped today", s, { today });
+  assert.equal(stopped.dueDate, "");
+  assert.match(stopped.description, /stopped today/i);
+});
+
+test("for a name is exact, and a bare name is only a suggestion", () => {
+  let s = sample();
+  s = PM.saveTech(s, { name: "Fred", hourlyRate: 20 }).state;
+  s = PM.saveTech(s, { name: "Cooper", hourlyRate: 20 }).state;
+  s = PM.saveTech(s, { name: "Michael Smith", hourlyRate: 30 }).state;
+  const today = "2026-11-12";
+  const seal = PM.parseVoiceWorkOrder("Work order, for the seal", s, { today });
+  assert.equal(seal.assignedTo, "");
+  assert.match(seal.description, /for the seal/i);
+  const waiting = PM.parseVoiceWorkOrder("Work order, waiting for Fred's call", s, { today });
+  assert.equal(waiting.assignedTo, "");
+  assert.match(waiting.description, /waiting for Fred's call/i);
+  const forFred = PM.parseVoiceWorkOrder("Work order, this one is for Fred", s, { today });
+  assert.equal(forFred.assignedName, "Fred");
+  const slip = PM.parseVoiceWorkOrder("Work order, this one is for Elana", s, { today });
+  assert.equal(slip.assignedTo, "");
+  assert.match(slip.description, /Elana/i);
+  const fitting = PM.parseVoiceWorkOrder("Work order, the Cooper fitting is cracked", s, { today });
+  assert.equal(fitting.assignedTo, "");
+  assert.equal(fitting.suggestedName, "Cooper");
+  assert.equal(fitting.assigneeNote, "Assign to Cooper?");
+  assert.match(PM.voiceSummary(fitting), /Assign to Cooper\?/);
+  assert.match(fitting.description, /Cooper fitting/i);
+  const accepted = PM.acceptAssigneeSuggestion(fitting);
+  assert.equal(accepted.assignedName, "Cooper");
+  assert.equal(accepted.suggestedName, "");
+  assert.equal(PM.applyVoiceCommand(fitting, "yes", s, { today }).command, "accept");
+  const welder = PM.parseVoiceWorkOrder("Work order, Mike the welder said the guard is loose", s, { today });
+  assert.equal(welder.assignedTo, "");
+  assert.equal(welder.suggestedId, "");
+  assert.match(welder.description, /Mike the welder/i);
+});
+
+test("a pending assignee asks yes or no and does not save", () => {
+  const pending = {
+    type: "Repair", description: "fitting is cracked", priority: "Normal",
+    suggestedId: "coop01", suggestedName: "Cooper Hayes", assigneeNote: "Assign to Cooper Hayes?", assignedTo: ""
+  };
+  const asked = PM.voiceSummary(pending);
+  assert.match(asked, /Assign to Cooper Hayes\?/);
+  assert.match(asked, /Say yes or no/);
+  assert.doesNotMatch(asked, /Say save/);
+  const again = PM.applyVoiceCommand(pending, "save", PM.emptyState(), {});
+  assert.equal(again.command, "reprompt");
+  assert.equal(again.parsed.suggestedId, "coop01");
+  assert.equal(again.parsed.assignedTo, "");
+  const yes = PM.applyVoiceCommand(pending, "yes", PM.emptyState(), {});
+  assert.equal(yes.command, "accept");
+  assert.equal(yes.parsed.assignedName, "Cooper Hayes");
+  assert.equal(yes.parsed.suggestedId, "");
+  assert.match(PM.voiceSummary(yes.parsed), /Assigned to Cooper Hayes/);
+  assert.match(PM.voiceSummary(yes.parsed), /Say save/);
+  const no = PM.applyVoiceCommand(pending, "no", PM.emptyState(), {});
+  assert.equal(no.command, "decline");
+  assert.equal(no.parsed.assignedTo, "");
+  assert.equal(no.parsed.suggestedId, "");
+  assert.match(PM.voiceSummary(no.parsed), /Unassigned/);
+  assert.match(PM.voiceSummary(no.parsed), /Say save/);
+  assert.equal(PM.applyVoiceCommand({ suggestedId: "", assignedTo: "abc" }, "save", PM.emptyState(), {}).command, "save");
+});
+
 test("a photo that does not fit is refused and a short one is kept whole", () => {
   const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert.equal(PM.acceptPhotoData("").ok, false);
