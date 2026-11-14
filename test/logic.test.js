@@ -630,6 +630,34 @@ test("for a name is exact, and a bare name is only a suggestion", () => {
   assert.match(welder.description, /Mike the welder/i);
 });
 
+test("a pending assignee asks yes or no and does not save", () => {
+  const pending = {
+    type: "Repair", description: "fitting is cracked", priority: "Normal",
+    suggestedId: "coop01", suggestedName: "Cooper Hayes", assigneeNote: "Assign to Cooper Hayes?", assignedTo: ""
+  };
+  const asked = PM.voiceSummary(pending);
+  assert.match(asked, /Assign to Cooper Hayes\?/);
+  assert.match(asked, /Say yes or no/);
+  assert.doesNotMatch(asked, /Say save/);
+  const again = PM.applyVoiceCommand(pending, "save", PM.emptyState(), {});
+  assert.equal(again.command, "reprompt");
+  assert.equal(again.parsed.suggestedId, "coop01");
+  assert.equal(again.parsed.assignedTo, "");
+  const yes = PM.applyVoiceCommand(pending, "yes", PM.emptyState(), {});
+  assert.equal(yes.command, "accept");
+  assert.equal(yes.parsed.assignedName, "Cooper Hayes");
+  assert.equal(yes.parsed.suggestedId, "");
+  assert.match(PM.voiceSummary(yes.parsed), /Assigned to Cooper Hayes/);
+  assert.match(PM.voiceSummary(yes.parsed), /Say save/);
+  const no = PM.applyVoiceCommand(pending, "no", PM.emptyState(), {});
+  assert.equal(no.command, "decline");
+  assert.equal(no.parsed.assignedTo, "");
+  assert.equal(no.parsed.suggestedId, "");
+  assert.match(PM.voiceSummary(no.parsed), /Unassigned/);
+  assert.match(PM.voiceSummary(no.parsed), /Say save/);
+  assert.equal(PM.applyVoiceCommand({ suggestedId: "", assignedTo: "abc" }, "save", PM.emptyState(), {}).command, "save");
+});
+
 test("a photo that does not fit is refused and a short one is kept whole", () => {
   const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
   assert.equal(PM.acceptPhotoData("").ok, false);

@@ -1494,12 +1494,23 @@
       suggestedName: ""
     });
   }
+  function declineAssigneeSuggestion(parsed) {
+    parsed = parsed || {};
+    return Object.assign({}, parsed, {
+      assignedTo: "",
+      assignedName: "",
+      suggestedId: "",
+      suggestedName: "",
+      assigneeNote: "Unassigned."
+    });
+  }
   function applyVoiceCommand(parsed, utterance, state, opts) {
     const command = voiceCommand(utterance);
     const u = String(utterance || "").toLowerCase().trim().replace(/[.!?]+$/g, "");
-    if (command === "save" && /^(yes|yeah|yep)$/.test(u) && parsed && parsed.suggestedId && !parsed.assignedTo) {
-      return { command: "accept", parsed: acceptAssigneeSuggestion(parsed) };
-    }
+    const pending = !!(parsed && parsed.suggestedId && !parsed.assignedTo);
+    if (pending && /^(yes|yeah|yep)$/.test(u)) return { command: "accept", parsed: acceptAssigneeSuggestion(parsed) };
+    if (pending && /^(no|nope)$/.test(u)) return { command: "decline", parsed: declineAssigneeSuggestion(parsed) };
+    if (pending && command === "save") return { command: "reprompt", parsed };
     if (command !== "change") return { command, parsed: parsed || null };
     const extra = String(utterance || "").replace(/^\s*change\s+(?:it\s+)?(?:to\s+)?/i, "");
     const next = parseVoiceWorkOrder((((parsed && parsed.transcript) || "") + " " + extra).trim(), state, opts || {});
@@ -1523,7 +1534,7 @@
     bits.push("priority " + (parsed.priority || "Normal"));
     if (parsed.assigneeNote) bits.push(parsed.assigneeNote);
     if (parsed.dueDate) bits.push("due " + parsed.dueDate);
-    bits.push("Say save, cancel, or change.");
+    bits.push(parsed.suggestedId ? "Say yes or no." : "Say save, cancel, or change.");
     return bits.join(". ");
   }
 
@@ -1595,6 +1606,6 @@
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
     generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
     PHOTO_MAX, acceptPhotoData, sensorAlertDue, sensorShouldStore, sensorAlertPlan, meterReadingOk, recentSensorLogs,
-    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, acceptAssigneeSuggestion, voiceSaveFields, voiceSummary
+    isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, acceptAssigneeSuggestion, declineAssigneeSuggestion, voiceSaveFields, voiceSummary
   };
 });
