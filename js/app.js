@@ -222,6 +222,43 @@
     return true;
   }
 
+  let workCount = 0;
+  function markWork(delta) {
+    workCount = Math.max(0, workCount + delta);
+    const el = byId("workMark");
+    if (el) el.hidden = workCount === 0;
+  }
+  /* One lock for every save. A second tap while this is running is ignored. */
+  function busy(button, fn, label) {
+    return async function () {
+      if (!button || button.dataset.busy === "1") return;
+      button.dataset.busy = "1";
+      button.disabled = true;
+      const prev = button.innerHTML;
+      button.innerHTML = `<span class="spin" aria-hidden="true"></span> ${label || "Saving…"}`;
+      markWork(1);
+      try { return await fn(); }
+      finally {
+        markWork(-1);
+        if (button.isConnected) {
+          button.dataset.busy = "0";
+          button.disabled = false;
+          button.innerHTML = prev;
+        }
+      }
+    };
+  }
+  ["persist", "refresh", "flush", "uploadPhoto"].forEach(name => {
+    const fn = Store[name];
+    if (typeof fn !== "function") return;
+    Store[name] = function () {
+      const ret = fn.apply(Store, arguments);
+      if (!ret || typeof ret.then !== "function") return ret;
+      markWork(1);
+      return ret.then(v => { markWork(-1); return v; }, err => { markWork(-1); throw err; });
+    };
+  });
+
   function route() {
     const raw = (location.hash || "#home").replace(/^#/, "");
     const bits = raw.split("/");
@@ -264,7 +301,7 @@
     window.__floorState = state;
     return {
       view, state, ui, PM, Store, route: route(), esc, sel, pill, toast, openSheet, closeSheet, commit, byId, val,
-      assetChoices, techChoices, meName, sortedAssets, sortedTechs, statusPill, assetPill, download, paint: paintChrome,
+      assetChoices, techChoices, meName, sortedAssets, sortedTechs, statusPill, assetPill, download, paint: paintChrome, busy,
       notify: (kind, assetId) => {
         if (Store.mode === "live" && Store.notify) Store.notify(kind, assetId).catch(() => toast("The email did not send. Check the alert address and that the script was redeployed."));
       },
@@ -742,7 +779,7 @@
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="flagSave">Save draft</button>`,
       () => {
         focusField("flagText");
-        byId("flagSave").addEventListener("click", async () => {
+        byId("flagSave").addEventListener("click", busy(byId("flagSave"), async () => {
           const text = val("flagText").trim();
           if (!text) { showErr("Say what you found, or type it in the box."); focusField("flagText"); return; }
           const title = text.split(/\n/)[0].slice(0, 80);
@@ -753,7 +790,7 @@
             assetId: val("flagAsset"), assignedTo: val("flagWho"), priority: "Normal", type: "Repair", openedDate: PM.today()
           });
           await commit(result, { hash: result.ok ? "#wo/" + result.woId : "" });
-        });
+        }));
       });
   }
 
@@ -785,7 +822,8 @@
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="wSave">${existing ? "Save" : "Create work order"}</button>`,
       () => {
         focusField(existing ? "wDesc" : "wTitle");
-        byId("wSave").addEventListener("click", async () => {
+        let savedWo = existing ? w.id : "";
+        byId("wSave").addEventListener("click", busy(byId("wSave"), async () => {
           let title = val("wTitle").trim();
           let description = val("wDesc").trim();
           if (!title && description) title = description.split(/\n/)[0].slice(0, 80);
@@ -794,7 +832,7 @@
           const status = val("wStat") || "open";
           const type = val("wType");
           const result = PM.saveWo(state, {
-            id: existing ? w.id : undefined,
+            id: savedWo || undefined,
             assetId: type === PM.GENERAL_TYPE ? "" : val("wAsset"),
             location: val("wLoc"),
             title, description, status,
@@ -807,8 +845,9 @@
             pmTaskId: existing ? w.pmTaskId : "",
             meterAt: existing ? w.meterAt : ""
           });
+          if (result.ok && result.woId) savedWo = result.woId;
           await commit(result, { hash: result.ok ? "#wo/" + result.woId : "" });
-        });
+        }));
       });
   }
 
@@ -827,18 +866,18 @@
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="cSave">Mark complete</button>`,
       () => {
         focusField("cDone");
-        byId("cSave").addEventListener("click", () => commit(PM.setWoStatus(state, {
+        byId("cSave").addEventListener("click", busy(byId("cSave"), () => commit(PM.setWoStatus(state, {
           id: w.id, status: "complete", workPerformed: val("cDone"), downtimeHours: val("cDown"),
           completedDate: val("cDate") || PM.today(), meterAt: byId("cMeter") ? val("cMeter") : "", techId: ui.me, date: val("cDate") || PM.today(),
           failureCode: byId("cFail") ? val("cFail") : w.failureCode, rootCause: byId("cRoot") ? val("cRoot") : w.rootCause
-        }), { hash: "#wo/" + w.id }));
+        }), { hash: "#wo/" + w.id })));
       });
   }
 
   function confirmCancel(w) {
     openSheet("Cancel " + w.woNumber, `<p>Cancelling returns every part on this job to the shelf. The work order stays in the history.</p><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Keep it</button><span class="sp"></span><button class="btn danger" type="button" id="yesCancel">Cancel work order</button>`,
-      () => byId("yesCancel").addEventListener("click", () => commit(PM.setWoStatus(state, { id: w.id, status: "cancelled" }), { hash: "#wo/" + w.id })));
+      () => byId("yesCancel").addEventListener("click", busy(byId("yesCancel"), () => commit(PM.setWoStatus(state, { id: w.id, status: "cancelled" }), { hash: "#wo/" + w.id }), "Working…")));
   }
 
   function meterForm(assetId, woId) {
@@ -853,9 +892,9 @@
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="mSave">Save reading</button>`,
       () => {
         focusField("mRead");
-        byId("mSave").addEventListener("click", () => commit(PM.saveReading(state, {
+        byId("mSave").addEventListener("click", busy(byId("mSave"), () => commit(PM.saveReading(state, {
           assetId, workOrderId: woId || "", reading: val("mRead"), date: val("mDate"), notes: val("mNote"), techId: ui.me
-        })));
+        }))));
       });
   }
 
@@ -873,10 +912,10 @@
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="tSave">Save time</button>`,
       () => {
         focusField("tHours");
-        byId("tSave").addEventListener("click", () => commit(PM.saveTime(state, {
+        byId("tSave").addEventListener("click", busy(byId("tSave"), () => commit(PM.saveTime(state, {
           techId: val("tWho"), workOrderId: wo ? wo.id : "", assetId: wo ? wo.assetId : val("tAsset"),
           hours: val("tHours"), date: val("tDate"), notes: val("tNote")
-        })));
+        }))));
       });
   }
 
@@ -902,14 +941,16 @@
         const sync = () => { byId("meterBits").style.display = val("aMetered") === "yes" ? "" : "none"; };
         byId("aMetered").addEventListener("change", sync); sync();
         focusField("aTag");
-        byId("aSave").addEventListener("click", async () => {
+        let savedId = existing && existing.id;
+        byId("aSave").addEventListener("click", busy(byId("aSave"), async () => {
           const result = PM.saveAsset(state, {
-            id: existing && existing.id, tag: val("aTag"), name: val("aName"), area: val("aArea"), type: val("aType"),
+            id: savedId, tag: val("aTag"), name: val("aName"), area: val("aArea"), type: val("aType"),
             make: val("aMake"), model: val("aModel"), year: val("aYear"), serial: val("aSerial"), status: val("aStatus"),
             metered: val("aMetered"), meterType: val("aMType"), meter: val("aMeter"), notes: val("aNotes")
           });
+          if (result.ok && result.assetId) savedId = result.assetId;
           await commit(result, { hash: result.ok ? "#asset/" + result.assetId : "" });
-        });
+        }));
       });
   }
 
@@ -945,10 +986,10 @@
           byId("lMeter").value = p.everyMeter;
           sync();
         });
-        byId("lSave").addEventListener("click", () => commit(PM.saveLevel(state, {
+        byId("lSave").addEventListener("click", busy(byId("lSave"), () => commit(PM.saveLevel(state, {
           id: existing && existing.id, assetId, name: val("lName"), basis: val("lBasis"),
           everyDays: val("lDays"), everyMeter: val("lMeter"), active: val("lActive")
-        }), { hash: "#asset/" + assetId }));
+        }), { hash: "#asset/" + assetId })));
       });
   }
 
@@ -982,14 +1023,14 @@
       () => {
         draw();
         byId("addLine").addEventListener("click", () => { readLines(); lines.push({ partId: state.parts[0] ? state.parts[0].id : "", qty: 1 }); draw(); });
-        byId("tSave").addEventListener("click", () => {
+        byId("tSave").addEventListener("click", busy(byId("tSave"), () => {
           readLines();
-          commit(PM.saveTask(state, {
+          return commit(PM.saveTask(state, {
             id: existing && existing.id, assetId, levelId: val("tLevel"), name: val("tName"), instructions: val("tInst"),
             parts: lines.filter(l => l.partId && PM.num(l.qty) > 0), active: val("tActive"),
             lastCompletedAt: val("tLast"), lastMeter: val("tLastM")
           }), { hash: "#asset/" + assetId });
-        });
+        }));
       });
   }
 
@@ -1009,14 +1050,16 @@
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="pSave">Save part</button>`,
       () => {
         focusField("pSku");
-        byId("pSave").addEventListener("click", async () => {
+        let savedPart = existing && existing.id;
+        byId("pSave").addEventListener("click", busy(byId("pSave"), async () => {
           const result = PM.savePart(state, {
-            id: existing && existing.id, sku: val("pSku"), name: val("pName"), bin: val("pBin"), vendor: val("pVendor"),
+            id: savedPart, sku: val("pSku"), name: val("pName"), bin: val("pBin"), vendor: val("pVendor"),
             unitCost: val("pCost"), reorderPoint: val("pPoint"), reorderQty: val("pQty"),
             onHand: existing ? existing.onHand : val("pOn"), notes: val("pNotes"), description: val("pName")
           });
+          if (result.ok && result.partId) savedPart = result.partId;
           await commit(result, { hash: result.ok ? "#part/" + result.partId : "" });
-        });
+        }));
       });
   }
 
@@ -1027,7 +1070,7 @@
       <div class="f"><label for="rNote">Note</label><input id="rNote" type="text" placeholder="PO or packing slip" autocomplete="on"></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="rSave">Receive</button>`,
-      () => byId("rSave").addEventListener("click", () => commit(PM.receiveStock(state, { partId: id, qty: val("rQty"), note: val("rNote") }), { hash: "#part/" + id })));
+      () => byId("rSave").addEventListener("click", busy(byId("rSave"), () => commit(PM.receiveStock(state, { partId: id, qty: val("rQty"), note: val("rNote") }), { hash: "#part/" + id }))));
   }
   function adjustForm(id) {
     const p = PM.partById(state, id);
@@ -1036,7 +1079,7 @@
       <div class="f"><label for="aNote">Note</label><input id="aNote" type="text" value="Physical count" autocomplete="on"></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="aSave">Set count</button>`,
-      () => byId("aSave").addEventListener("click", () => commit(PM.adjustStock(state, { partId: id, onHand: val("aOn"), note: val("aNote") }), { hash: "#part/" + id })));
+      () => byId("aSave").addEventListener("click", busy(byId("aSave"), () => commit(PM.adjustStock(state, { partId: id, onHand: val("aOn"), note: val("aNote") }), { hash: "#part/" + id }))));
   }
 
   function fitForm(assetId) {
@@ -1051,7 +1094,7 @@
       `<button class="btn" type="button" data-close>Close</button><button class="btn" type="button" id="fNew">New part</button><span class="sp"></span><button class="btn primary" type="button" id="fSave">Add to this machine</button>`,
       () => {
         byId("fNew").addEventListener("click", () => partForm());
-        byId("fSave").addEventListener("click", () => commit(PM.saveFit(state, { partId: val("fPart"), assetId, notes: val("fNote"), addedBy: meName() }), { hash: "#asset/" + assetId }));
+        byId("fSave").addEventListener("click", busy(byId("fSave"), () => commit(PM.saveFit(state, { partId: val("fPart"), assetId, notes: val("fNote"), addedBy: meName() }), { hash: "#asset/" + assetId })));
       });
   }
 
@@ -1070,10 +1113,10 @@
       <div class="f"><label for="gWho">Assign to</label>${sel("gWho", ui.me, techChoices("Leave unassigned"))}</div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="gSave">Make work order</button>`,
-      () => byId("gSave").addEventListener("click", async () => {
+      () => byId("gSave").addEventListener("click", busy(byId("gSave"), async () => {
         const result = PM.generatePm(state, { taskId, assignedTo: val("gWho"), today: PM.today() });
         await commit(result, { hash: result.ok ? "#wo/" + result.woId : "" });
-      }));
+      }, "Working…")));
   }
 
   function generateDueForm() {
@@ -1084,7 +1127,7 @@
       <div class="f"><label for="gWho">Assign them to</label>${sel("gWho", ui.me, techChoices("Leave unassigned"))}</div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="gSave">Open them</button>`,
-      () => byId("gSave").addEventListener("click", () => commit(PM.generateDue(state, { today: day, assignedTo: val("gWho") }), { hash: "#work" })));
+      () => byId("gSave").addEventListener("click", busy(byId("gSave"), () => commit(PM.generateDue(state, { today: day, assignedTo: val("gWho") }), { hash: "#work" }), "Working…")));
   }
 
   function techForm(existing) {
@@ -1100,14 +1143,14 @@
       `${existing ? `<button class="btn danger" type="button" id="eDel">Remove</button>` : ""}<span class="sp"></span><button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="eSave">Save</button>`,
       () => {
         focusField("eName");
-        if (byId("eDel")) byId("eDel").addEventListener("click", async () => {
+        if (byId("eDel")) byId("eDel").addEventListener("click", busy(byId("eDel"), async () => {
           const result = PM.deleteTech(state, t.id);
           if (ui.me === t.id) { ui.me = ""; saveUi(); }
           await commit(result, { hash: "#team" });
-        });
-        byId("eSave").addEventListener("click", () => commit(PM.saveTech(state, {
+        }, "Working…"));
+        byId("eSave").addEventListener("click", busy(byId("eSave"), () => commit(PM.saveTech(state, {
           id: existing && existing.id, name: val("eName"), role: val("eRole"), phone: val("ePhone"), email: val("eMail"), hourlyRate: val("eRate"), active: val("eActive")
-        }), { hash: "#team" }));
+        }), { hash: "#team" })));
       });
   }
 
@@ -1128,7 +1171,7 @@
           if (fresh.ok && fresh.state) { state = fresh.state; toast("Connected to the sheet."); render(); }
           else { toast("Couldn't reach the sheet yet. We'll keep trying."); render(); }
         };
-        byId("codeGo").addEventListener("click", go);
+        byId("codeGo").addEventListener("click", busy(byId("codeGo"), go, "Working…"));
         byId("plantCode").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
       });
   }
@@ -1199,7 +1242,7 @@
       `<button class="btn" type="button" id="voiceCancel">Cancel</button><span class="sp"></span><button class="btn primary" type="button" id="voiceSave" hidden>Save</button>`,
       () => {
         byId("voiceCancel").onclick = () => { stopVoiceSession(); closeSheet(); toast("Discarded."); };
-        byId("voiceSave").onclick = () => saveParsed();
+        byId("voiceSave").onclick = busy(byId("voiceSave"), () => saveParsed(), "Saving…");
       });
     function showParsed(p) {
       parsed = p;
@@ -1228,8 +1271,10 @@
       }
       speak(PM.voiceSummary(p));
     }
+    let voiceSaving = false;
     function saveParsed() {
-      if (!parsed || parsed.suggestedId) return;
+      if (!parsed || parsed.suggestedId || voiceSaving) return;
+      voiceSaving = true;
       const chosen = byId("voiceAsset") ? byId("voiceAsset").value : "";
       const fields = PM.voiceSaveFields(parsed, chosen);
       stopVoiceSession();
@@ -1240,7 +1285,7 @@
         status: "open", source: "voice", voiceTranscript: fields.voiceTranscript,
         openedDate: PM.today(), requestedBy: meName()
       });
-      commit(result, { hash: result.ok ? "#wo/" + result.woId : "" });
+      return commit(result, { hash: result.ok ? "#wo/" + result.woId : "" }).finally(() => { voiceSaving = false; });
     }
     let rec;
     try { rec = new SR(); } catch (e) { toast("The mic isn't available in this browser. Type the work order instead."); return; }
@@ -1291,43 +1336,45 @@
     catch (e) { voiceSession = null; toast("The mic isn't available. Type the work order instead."); }
   }
 
+  const SAVE_ACTIONS = { "delete-draft": 1, "assign-me": 1, "use-part": 1, "return-use": 1, "delete-level": 1, "remove-fit": 1, "delete-part": 1, "delete-time": 1, sync: 1 };
   view.addEventListener("click", e => {
     const btn = e.target.closest("[data-action]");
-    if (!btn || !view.contains(btn)) return;
+    if (!btn || !view.contains(btn) || btn.dataset.busy === "1") return;
     const action = btn.dataset.action;
     const id = btn.dataset.id || "";
+    const run = () => {
     if (action === "voice-wo") startVoiceWorkOrder(id);
     else if (action === "new-wo") woForm(null, { assetId: id });
     else if (action === "edit-wo") woForm(PM.woById(state, id));
     else if (action === "complete-wo") completeForm(PM.woById(state, id));
     else if (action === "cancel-wo") confirmCancel(PM.woById(state, id));
-    else if (action === "delete-draft") commit(PM.deleteDraft(state, id), { hash: "#work" });
-    else if (action === "assign-me") commit(PM.saveWo(state, Object.assign({}, PM.woById(state, id), { assignedTo: ui.me })));
+    else if (action === "delete-draft") return commit(PM.deleteDraft(state, id), { hash: "#work" });
+    else if (action === "assign-me") return commit(PM.saveWo(state, Object.assign({}, PM.woById(state, id), { assignedTo: ui.me })));
     else if (action === "log-time") timeForm({ woId: id });
     else if (action === "log-time-asset") timeForm({ assetId: id });
     else if (action === "log-meter") meterForm(id, btn.dataset.wo || (route().name === "wo" ? route().id : ""));
-    else if (action === "use-part") onUse(id);
-    else if (action === "return-use") commit(PM.returnUse(state, id));
+    else if (action === "use-part") return onUse(id);
+    else if (action === "return-use") return commit(PM.returnUse(state, id));
     else if (action === "print-wo") printWo(id);
     else if (action === "new-asset") assetForm();
     else if (action === "edit-asset") assetForm(PM.assetById(state, id));
     else if (action === "add-level") levelForm(id);
     else if (action === "edit-level") { const l = PM.levelById(state, id); levelForm(l.assetId, l); }
-    else if (action === "delete-level") commit(PM.deleteLevel(state, id));
+    else if (action === "delete-level") return commit(PM.deleteLevel(state, id));
     else if (action === "add-task") taskForm(id);
     else if (action === "edit-task") { const t = PM.taskById(state, id); taskForm(t.assetId, t); }
     else if (action === "add-fit") fitForm(id);
-    else if (action === "remove-fit") commit(PM.deleteFit(state, id));
+    else if (action === "remove-fit") return commit(PM.deleteFit(state, id));
     else if (action === "new-part") partForm();
     else if (action === "edit-part") partForm(PM.partById(state, id));
     else if (action === "receive") receiveForm(id);
     else if (action === "adjust") adjustForm(id);
-    else if (action === "delete-part") commit(PM.deletePart(state, id), { hash: "#parts" });
+    else if (action === "delete-part") return commit(PM.deletePart(state, id), { hash: "#parts" });
     else if (action === "make-pm") makePmForm(id);
     else if (action === "generate-due") generateDueForm();
     else if (action === "new-tech") techForm();
     else if (action === "edit-tech") techForm(PM.techById(state, id));
-    else if (action === "delete-time") commit(PM.deleteTime(state, id));
+    else if (action === "delete-time") return commit(PM.deleteTime(state, id));
     else if (action === "reset-sample") {
       state = Store.resetSample();
       ui.me = "";
@@ -1336,12 +1383,15 @@
       location.hash = "#home";
       render();
     } else if (action === "sync") {
-      pullSheet({ ask: true, force: true }).then(r => {
+      return pullSheet({ ask: true, force: true }).then(r => {
         if (!r || r.unauthorized) return;
         if (r.ok) toast("Up to date.");
         else toast("Couldn't reach the sheet.");
       });
     }
+    };
+    if (SAVE_ACTIONS[action]) busy(btn, run, action === "sync" ? "Working…" : "Saving…")();
+    else run();
   });
 
   document.getElementById("flagBtn").addEventListener("click", flagForm);
