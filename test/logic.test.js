@@ -818,3 +818,17 @@ test("labels decode with a real QR reader", () => {
   assert.equal(decode("WL-1"), "WL-1");
   assert.equal(decode("https://example.com/plant/" + "a".repeat(40)), "https://example.com/plant/" + "a".repeat(40));
 });
+
+test("a second save of a new asset uses the id from the first save", () => {
+  const first = PM.saveAsset(sample(), { tag: "ZZ-9", name: "New press", metered: "no" });
+  assert.equal(first.ok, true);
+  assert.ok(first.assetId);
+  const again = PM.saveAsset(first.state, { id: first.assetId, tag: "ZZ-9", name: "New press, painted", metered: "no" });
+  assert.equal(again.ok, true);
+  assert.equal(again.assetId, first.assetId);
+  assert.equal(again.state.assets.filter(a => a.tag === "ZZ-9").length, 1);
+  assert.equal(again.state.assets.find(a => a.id === first.assetId).name, "New press, painted");
+  const dup = PM.saveAsset(first.state, { tag: "ZZ-9", name: "New press", metered: "no" });
+  assert.equal(dup.ok, false);
+  assert.match(dup.message, /Tag ZZ-9 is already in use/);
+});

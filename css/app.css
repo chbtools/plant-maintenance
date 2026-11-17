@@ -48,6 +48,10 @@ a { color: var(--accent); }
 .btn.danger { color: var(--bad); border-color: var(--bad); }
 .btn.small { min-height: 36px; padding: 5px 10px; font-size: .9rem; }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
+.spin { width: .9em; height: .9em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; vertical-align: -2px; animation: pm-spin .7s linear infinite; }
+@keyframes pm-spin { to { transform: rotate(360deg); } }
+.work-mark { display: inline-flex; align-items: center; gap: 6px; color: var(--on-steel-muted); font-size: .78rem; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.work-mark[hidden] { display: none; }
 .band .btn { background: transparent; color: var(--on-steel); border-color: #4c5966; }
 .band .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 

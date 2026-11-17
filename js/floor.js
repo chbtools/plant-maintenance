@@ -128,6 +128,14 @@
     },
     async onAction(action, btn) {
       const ctx = this._ctx;
+      if (!ctx || (btn && btn.dataset.busy === "1")) return;
+      const slow = action === "up" || action === "down" || action === "add-photo" || action === "del-loto" || action === "unschedule" || action === "del-code";
+      const run = () => this._act(action, btn);
+      if (slow && ctx.busy) return ctx.busy(btn, run, action === "up" ? "Working…" : "Saving…")();
+      return run();
+    },
+    async _act(action, btn) {
+      const ctx = this._ctx;
       if (!ctx) return;
       const id = btn.dataset.id || "";
       const P = PM();
@@ -228,10 +236,10 @@
     const list = id ? ctx.state.assets.filter(a => a.id === id) : ctx.state.assets.slice().sort((a, b) => String(a.tag).localeCompare(String(b.tag), undefined, { numeric: true }));
     ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><div class="toolbar"><p class="note" style="flex:1;margin:0">${id ? "One label." : "A sheet of labels. Use the browser print dialog and pick Save as PDF if you want a file."}</p><button class="btn primary" type="button" id="printLabels">Print</button></div>
       <div class="labels" id="labelSheet">${list.map(a => `<article class="label"><div class="qr">${qrImg(linkFor(a.id))}</div><div><b>${ctx.esc(a.tag)}</b><div>${ctx.esc(a.name)}</div><div class="note">${ctx.esc(a.area || "")}</div></div></article>`).join("")}</div>`;
-    document.getElementById("printLabels").onclick = () => {
+    document.getElementById("printLabels").onclick = () => ctx.busy(document.getElementById("printLabels"), async () => {
       document.getElementById("printArea").innerHTML = document.getElementById("labelSheet").outerHTML;
       setTimeout(() => window.print(), 50);
-    };
+    }, "Working…")();
   }
   function room(ctx) {
     const P = PM();
@@ -270,7 +278,7 @@
     ctx.view.querySelectorAll(".seg").forEach(seg => seg.querySelectorAll("button").forEach(b => b.onclick = () => {
       seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", x === b ? "true" : "false"));
     }));
-    document.getElementById("inspSave").onclick = async () => {
+    document.getElementById("inspSave").onclick = () => ctx.busy(document.getElementById("inspSave"), async () => {
       const lines = items.map(item => {
         const seg = ctx.view.querySelector('[data-item="' + item.id + '"] button[aria-pressed="true"]');
         const note = ctx.view.querySelector('[data-note="' + item.id + '"]');
@@ -278,7 +286,7 @@
       });
       const result = P.submitInspection(ctx.state, { templateId: id, assetId: document.getElementById("inspAsset").value, techId: ctx.ui.me, lines, date: P.today() });
       await ctx.commit(result, { hash: "#inspect" });
-    };
+    }, "Saving…")();
   }
   function schedule(ctx) {
     const P = PM();
@@ -321,10 +329,10 @@
       <h3>Top offenders</h3><div class="tbl-wrap"><table><thead><tr><th>Asset</th><th class="num">Jobs</th><th class="num">Down h</th><th class="num">Cost</th></tr></thead><tbody>
       ${r.offenders.map(o => `<tr><td>${ctx.esc(o.tag)} ${ctx.esc(o.name)}</td><td class="num">${o.woCount}</td><td class="num">${o.downtime}</td><td class="num">${ctx.esc(P.money(o.cost))}</td></tr>`).join("")}</tbody></table></div>
       <p class="note">${r.pmOk} of ${r.pmCount} PM tasks are currently on time.</p></article>`;
-    document.getElementById("printMonth").onclick = () => {
+    document.getElementById("printMonth").onclick = () => ctx.busy(document.getElementById("printMonth"), async () => {
       document.getElementById("printArea").innerHTML = document.getElementById("onePager").outerHTML;
       setTimeout(() => window.print(), 50);
-    };
+    }, "Working…")();
   }
   function vendors(ctx) {
     const alerts = PM().warrantyAlerts(ctx.state, PM().today());
@@ -340,8 +348,8 @@
     ctx.view.innerHTML = `<p class="back"><a href="#floor">Floor tools</a></p><article class="panel"><h2>Failure codes</h2><p class="note">Techs pick one of these when they complete a work order. Add or retire a code here.</p>
       ${rows.length ? rows.map(c => `<div class="partline"><div><b>${ctx.esc(c.name)}</b>${c.active === "no" ? " · paused" : ""}</div><button class="btn small" type="button" data-floor="del-code" data-id="${ctx.esc(c.id)}">Remove</button></div>`).join("") : `<p class="note">Using the built-in list until you save your own: ${ctx.esc(names.join(", "))}.</p>`}
       <div class="fitrow"><input id="codeName" data-code="1" type="text" placeholder="New code" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"><button class="btn" type="button" id="addCode">Add</button></div></article>`;
-    ctx.view.querySelectorAll("[data-floor='del-code']").forEach(b => b.onclick = () => ctx.commit(PM().deleteFailureCode(ctx.state, b.dataset.id)));
-    document.getElementById("addCode").onclick = () => ctx.commit(PM().saveFailureCode(ctx.state, { name: document.getElementById("codeName").value }));
+    ctx.view.querySelectorAll("[data-floor='del-code']").forEach(b => b.onclick = () => ctx.busy(b, () => ctx.commit(PM().deleteFailureCode(ctx.state, b.dataset.id)), "Saving…")());
+    document.getElementById("addCode").onclick = () => ctx.busy(document.getElementById("addCode"), () => ctx.commit(PM().saveFailureCode(ctx.state, { name: document.getElementById("codeName").value })), "Saving…")();
   }
   function settings(ctx) {
     const s = PM().plantSettings(ctx.state);
@@ -355,11 +363,11 @@
         <div class="f"><label for="alertEmail">Down / out-of-range email</label><input id="alertEmail" type="email" value="${ctx.esc(s.alertEmail || "")}"></div></div>
       <button class="btn primary" type="button" id="saveMail">Save email settings</button></article>`;
     ctx.view.querySelectorAll("[data-mod]").forEach(box => box.onchange = () => { setShown(box.dataset.mod, box.checked); ctx.toast(box.checked ? "Showing that module." : "Hidden from the menus."); ctx.paint && ctx.paint(); });
-    document.getElementById("saveMail").onclick = () => ctx.commit(PM().saveSettings(ctx.state, {
+    document.getElementById("saveMail").onclick = () => ctx.busy(document.getElementById("saveMail"), () => ctx.commit(PM().saveSettings(ctx.state, {
       digestEmail: document.getElementById("digestEmail").value,
       digestHour: document.getElementById("digestHour").value,
       alertEmail: document.getElementById("alertEmail").value
-    }));
+    })), "Saving…")();
   }
 
   function lotoForm(ctx, assetId) {
@@ -367,13 +375,13 @@
       <div class="f"><label for="lEnergy">Energy</label><select id="lEnergy"><option>electrical</option><option>pneumatic</option><option>hydraulic</option><option>gravity</option><option>thermal</option><option>other</option></select></div>
       <div class="f"><label for="lHow">How to isolate</label><textarea id="lHow" rows="3"></textarea></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="lSave">Save</button>`,
-      () => document.getElementById("lSave").onclick = () => ctx.commit(PM().saveLoto(ctx.state, { assetId, name: document.getElementById("lName").value, energy: document.getElementById("lEnergy").value, howToIsolate: document.getElementById("lHow").value })));
+      () => document.getElementById("lSave").onclick = () => ctx.busy(document.getElementById("lSave"), () => ctx.commit(PM().saveLoto(ctx.state, { assetId, name: document.getElementById("lName").value, energy: document.getElementById("lEnergy").value, howToIsolate: document.getElementById("lHow").value })), "Saving…")());
   }
   function warrantyForm(ctx, assetId) {
     ctx.openSheet("Warranty", `<div class="f"><label for="wWhat">What is covered</label><input id="wWhat" type="text"></div>
       <div class="g2"><div class="f"><label for="wVendor">Vendor</label><input id="wVendor" type="text"></div><div class="f"><label for="wExp">Expires</label><input id="wExp" type="date"></div></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="wSaveW">Save</button>`,
-      () => document.getElementById("wSaveW").onclick = () => ctx.commit(PM().saveWarranty(ctx.state, { assetId, what: document.getElementById("wWhat").value, vendor: document.getElementById("wVendor").value, expires: document.getElementById("wExp").value })));
+      () => document.getElementById("wSaveW").onclick = () => ctx.busy(document.getElementById("wSaveW"), () => ctx.commit(PM().saveWarranty(ctx.state, { assetId, what: document.getElementById("wWhat").value, vendor: document.getElementById("wVendor").value, expires: document.getElementById("wExp").value })), "Saving…")());
   }
   function outsideForm(ctx, assetId) {
     ctx.openSheet("Outside service", `<div class="f"><label for="oVendor">Vendor</label><input id="oVendor" type="text"></div>
@@ -381,7 +389,7 @@
       <div class="g2"><div class="f"><label for="oCost">Cost</label><input id="oCost" type="number" min="0" step="0.01"></div>
         <div class="f"><label for="oStat">Status</label><select id="oStat"><option>quoted</option><option>approved</option><option>in shop</option><option>back</option><option>closed</option></select></div></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="oSave">Save</button>`,
-      () => document.getElementById("oSave").onclick = () => ctx.commit(PM().saveOutsideJob(ctx.state, { assetId, vendor: document.getElementById("oVendor").value, estimate: document.getElementById("oEst").value, po: document.getElementById("oPo").value, cost: document.getElementById("oCost").value, status: document.getElementById("oStat").value, openedDate: PM().today() })));
+      () => document.getElementById("oSave").onclick = () => ctx.busy(document.getElementById("oSave"), () => ctx.commit(PM().saveOutsideJob(ctx.state, { assetId, vendor: document.getElementById("oVendor").value, estimate: document.getElementById("oEst").value, po: document.getElementById("oPo").value, cost: document.getElementById("oCost").value, status: document.getElementById("oStat").value, openedDate: PM().today() })), "Saving…")());
   }
   function limitForm(ctx, assetId) {
     ctx.openSheet("Reading limit", `<div class="f"><label for="limName">Name</label><input id="limName" type="text" placeholder="Discharge pressure"></div>
@@ -389,7 +397,7 @@
         <div class="f"><label for="limLow">Low</label><input id="limLow" type="number" step="any"></div>
         <div class="f"><label for="limHigh">High</label><input id="limHigh" type="number" step="any"></div></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="limSave">Save</button>`,
-      () => document.getElementById("limSave").onclick = () => ctx.commit(PM().saveLimit(ctx.state, { assetId, name: document.getElementById("limName").value, unit: document.getElementById("limUnit").value, low: document.getElementById("limLow").value, high: document.getElementById("limHigh").value })));
+      () => document.getElementById("limSave").onclick = () => ctx.busy(document.getElementById("limSave"), () => ctx.commit(PM().saveLimit(ctx.state, { assetId, name: document.getElementById("limName").value, unit: document.getElementById("limUnit").value, low: document.getElementById("limLow").value, high: document.getElementById("limHigh").value })), "Saving…")());
   }
   function sensorForm(ctx, assetId) {
     const names = (ctx.state.sensorLimits || []).filter(l => l.assetId === assetId).map(l => l.name);
@@ -397,24 +405,24 @@
       <div class="g2"><div class="f"><label for="sVal">Value</label><input id="sVal" type="number" step="any"></div>
         <div class="f"><label for="sType">Type</label><select id="sType"><option value="pressure">pressure</option><option value="temp">temperature</option><option value="dewpoint">dew point</option><option value="drain">drain check</option><option value="hours">run hours</option><option value="other">other</option></select></div></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="sSave">Save</button>`,
-      () => document.getElementById("sSave").onclick = async () => {
+      () => document.getElementById("sSave").onclick = () => ctx.busy(document.getElementById("sSave"), async () => {
         const result = PM().ingestSensor(ctx.state, { assetId, name: document.getElementById("sName").value, value: document.getElementById("sVal").value, type: document.getElementById("sType").value, source: "manual", date: PM().today() });
         const ok = await ctx.commit(result);
-        if (ok && result.flag && result.flag !== "ok") ctx.notify("sensor-range", result.assetId || id);
-      });
+        if (ok && result.flag && result.flag !== "ok") ctx.notify("sensor-range", result.assetId || assetId);
+      }, "Saving…")());
   }
   function templateForm(ctx) {
     ctx.openSheet("New checklist", `<div class="f"><label for="cName">Name</label><input id="cName" type="text" placeholder="Daily compressor round"></div>
       <div class="f"><label for="cAsset">Machine (optional)</label>${ctx.sel("cAsset", "", ctx.assetChoices("Any machine"))}</div>
       <div class="f"><label for="cLines">Lines, one per row</label><textarea id="cLines" rows="6" placeholder="Discharge pressure in range&#10;Drains blown"></textarea></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="cSaveT">Save</button>`,
-      () => document.getElementById("cSaveT").onclick = () => ctx.commit(PM().saveTemplate(ctx.state, { name: document.getElementById("cName").value, assetId: document.getElementById("cAsset").value, items: document.getElementById("cLines").value.split(/\n/) })));
+      () => document.getElementById("cSaveT").onclick = () => ctx.busy(document.getElementById("cSaveT"), () => ctx.commit(PM().saveTemplate(ctx.state, { name: document.getElementById("cName").value, assetId: document.getElementById("cAsset").value, items: document.getElementById("cLines").value.split(/\n/) })), "Saving…")());
   }
   function assignForm(ctx, date, techId) {
     const open = ctx.state.workOrders.filter(w => w.status !== "complete" && w.status !== "cancelled" && w.status !== "draft");
     ctx.openSheet("Assign " + date, `<div class="f"><label for="aWo">Work order</label><select id="aWo">${open.map(w => `<option value="${ctx.esc(w.id)}">${ctx.esc(w.woNumber)} ${ctx.esc(w.title)}</option>`).join("")}</select></div><div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><button class="btn primary" type="button" id="aSave">Put it on this day</button>`,
-      () => document.getElementById("aSave").onclick = () => ctx.commit(PM().saveSchedule(ctx.state, { date, techId, workOrderId: document.getElementById("aWo").value })));
+      () => document.getElementById("aSave").onclick = () => ctx.busy(document.getElementById("aSave"), () => ctx.commit(PM().saveSchedule(ctx.state, { date, techId, workOrderId: document.getElementById("aWo").value })), "Saving…")());
   }
   async function savePhoto(ctx, woId, assetId) {
     const file = document.getElementById("photoFile") && document.getElementById("photoFile").files[0];
