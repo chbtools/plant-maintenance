@@ -16,6 +16,7 @@
     workView: "open",
     workQ: "",
     assetQ: "",
+    assetKind: "all",
     partQ: "",
     partView: "all",
     report: "work",
@@ -54,13 +55,18 @@
     setTimeout(() => { if (t.parentNode) t.remove(); }, 3200);
   }
   function sortedAssets() {
-    return state.assets.slice().sort((a, b) => String(a.tag).localeCompare(String(b.tag), undefined, { numeric: true }));
+    return state.assets.slice().sort((a, b) => {
+      const ka = PM.isDepartment(a) ? 1 : 0;
+      const kb = PM.isDepartment(b) ? 1 : 0;
+      if (ka !== kb) return ka - kb;
+      return String(a.tag).localeCompare(String(b.tag), undefined, { numeric: true });
+    });
   }
   function sortedTechs() {
     return state.techs.filter(t => t.active !== "no").slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }
   function assetChoices(blank) {
-    return [["" , blank || "Choose equipment…"]].concat(sortedAssets().map(a => [a.id, a.tag + " — " + a.name]));
+    return [["" , blank || "Choose equipment…"]].concat(sortedAssets().map(a => [a.id, a.tag + " — " + a.name + (PM.isDepartment(a) ? " · Department" : "")]));
   }
   function techChoices(blank) {
     return [["" , blank || "Unassigned"]].concat(sortedTechs().map(t => [t.id, t.name]));
@@ -70,6 +76,7 @@
   }
   function pill(level, text) { return `<span class="pill ${level}">${esc(text)}</span>`; }
   function assetPill(a) {
+    if (PM.isDepartment(a)) return pill("info", "Department");
     const s = (a && a.status) || "Running";
     const level = s === "Running" ? "ok" : s === "Down" ? "bad" : "idle";
     return pill(level, s);
@@ -487,8 +494,10 @@
 
   function renderAssets() {
     view.innerHTML = `
-      <div class="toolbar"><input class="grow" id="assetQ" type="search" placeholder="Search tag, name, area" value="${esc(ui.assetQ)}" aria-label="Search equipment" autocomplete="on"><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>
+      <div class="toolbar"><div class="chips"><button class="chip" type="button" data-ak="all" aria-pressed="${ui.assetKind === "all"}">All</button><button class="chip" type="button" data-ak="Machine" aria-pressed="${ui.assetKind === "Machine"}">Machines</button><button class="chip" type="button" data-ak="Department" aria-pressed="${ui.assetKind === "Department"}">Departments</button></div>
+        <input class="grow" id="assetQ" type="search" placeholder="Search tag, name, area" value="${esc(ui.assetQ)}" aria-label="Search equipment" autocomplete="on"><button class="btn" type="button" data-action="new-department">+ Department</button><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>
       <div id="assetList">${assetCards()}</div>`;
+    view.querySelectorAll("[data-ak]").forEach(b => b.addEventListener("click", () => { ui.assetKind = b.dataset.ak; renderAssets(); }));
     bindSearch("assetQ", value => {
       ui.assetQ = value;
       const host = byId("assetList");
@@ -498,14 +507,21 @@
   }
   function assetCards() {
     const q = ui.assetQ.toLowerCase();
-    const list = sortedAssets().filter(a => !q || [a.tag, a.name, a.area, a.type, a.make, a.model].join(" ").toLowerCase().includes(q));
+    const list = sortedAssets().filter(a => {
+      if (ui.assetKind === "Department" && !PM.isDepartment(a)) return false;
+      if (ui.assetKind === "Machine" && PM.isDepartment(a)) return false;
+      return !q || [a.tag, a.name, a.area, a.type, a.make, a.model, PM.assetKind(a)].join(" ").toLowerCase().includes(q);
+    });
     const day = PM.today();
+    if (!list.length && ui.assetKind === "Department") return `<div class="empty"><h3>No department assets yet</h3><p>Turn an area into an asset so parts can be attached to the department, not only to a machine.</p><button class="btn primary" type="button" data-action="new-department">+ Department</button></div>`;
     if (!list.length) return `<div class="empty"><h3>No equipment yet</h3><p>Add each machine once. Then work orders, parts, and PMs hang off it.</p><button class="btn primary" type="button" data-action="new-asset">+ Asset</button></div>`;
     return `<div class="cards">${list.map(a => {
       const spend = PM.spendBetween(state, PM.addDays(day, -89), day, a.id);
       const due = state.pmTasks.filter(t => t.assetId === a.id && ["overdue", "due", "soon"].includes(PM.pmInfo(state, t, day).status)).length;
-      return `<a class="card" href="#asset/${esc(a.id)}"><div class="card-top"><span class="tag">${esc(a.tag)}</span><span class="title">${esc(a.name)}<small style="display:block;font-weight:400;color:var(--muted)">${esc(a.area || a.type || "")}</small></span>${assetPill(a)}</div>
-          <div class="meta"><span>${PM.isMetered(a) && PM.hasNum(a.meter) ? esc(PM.num(a.meter).toLocaleString()) + " " + esc(PM.meterWord(a)) : "No meter"}</span><span>90-day ${esc(money0(spend.total))}</span>${due ? `<span>${due} PM</span>` : ""}</div></a>`;
+      const dept = PM.isDepartment(a);
+      const fits = state.fits.filter(f => f.assetId === a.id).length;
+      return `<a class="card" href="#asset/${esc(a.id)}"><div class="card-top"><span class="tag">${esc(a.tag)}</span><span class="title">${esc(a.name)}<small style="display:block;font-weight:400;color:var(--muted)">${esc(dept ? "Department" : (a.area || a.type || ""))}</small></span>${assetPill(a)}</div>
+          <div class="meta"><span>${dept ? fits + " part" + (fits === 1 ? "" : "s") : (PM.isMetered(a) && PM.hasNum(a.meter) ? esc(PM.num(a.meter).toLocaleString()) + " " + esc(PM.meterWord(a)) : "No meter")}</span><span>90-day ${esc(money0(spend.total))}</span>${due ? `<span>${due} PM</span>` : ""}</div></a>`;
     }).join("")}</div>`;
   }
 
@@ -527,7 +543,7 @@
             <p class="note">${esc([a.area, a.type, a.make, a.model, a.year].filter(Boolean).join(" · "))}${a.serial ? " · " + esc(a.serial) : ""}</p>
             <div class="f"><label for="assetStatus">Status</label>${sel("assetStatus", a.status, PM.ASSET_STATUSES.map(s => [s, s]))}</div>
             <div class="costline"><div>90-day cost<b>${esc(money0(spend.total))}</b></div><div>Downtime<div>${esc(spend.downtime)} h</div></div><div>Labor<div>${esc(spend.hours)} h</div></div></div>
-            <p class="note">${PM.isMetered(a) ? "Meter: " + (PM.hasNum(a.meter) ? PM.num(a.meter).toLocaleString() + " " + PM.meterWord(a) : "none logged yet") : "No meter — PM dates come from the calendar."}</p>
+            <p class="note">${PM.isDepartment(a) ? "Department. Parts and work orders attach here the same way they do on a machine." : (PM.isMetered(a) ? "Meter: " + (PM.hasNum(a.meter) ? PM.num(a.meter).toLocaleString() + " " + PM.meterWord(a) : "none logged yet") : "No meter — PM dates come from the calendar.")}</p>
             ${a.notes ? `<p class="prose">${esc(a.notes)}</p>` : ""}
             <div class="actions">
               <button class="btn" type="button" data-action="edit-asset" data-id="${esc(a.id)}">Edit</button>
@@ -549,9 +565,9 @@
             ${tasks.length ? tasks.map(t => { const info = PM.pmInfo(state, t, day); const level = PM.levelById(state, t.levelId); return `<div class="partline"><div>${pmPill(info)} <b>${esc(t.name)}</b><div class="note">${esc(level ? level.name : "")} · ${esc(info.summary)}</div></div><button class="btn small" type="button" data-action="edit-task" data-id="${esc(t.id)}">Edit</button></div>`; }).join("") : `<p class="note">No PM tasks yet. Add a level, then a task.</p>`}
             <button class="btn" type="button" data-action="add-task" data-id="${esc(a.id)}">+ PM task</button>
           </article>
-          <article class="panel"><h2>Parts that fit ${esc(a.tag)}</h2>
+          <article class="panel"><h2>${PM.isDepartment(a) ? "Parts for this department" : "Parts that fit " + esc(a.tag)}</h2>
             ${fits.length ? fits.map(f => { const p = PM.partById(state, f.partId); if (!p) return ""; return `<div class="partline"><div><b>${esc(p.sku)}</b> ${esc(p.name)}<div class="note">On hand ${esc(PM.num(p.onHand))}${PM.num(p.onHand) <= PM.num(p.reorderPoint) ? " · reorder" : ""}${f.notes ? " · " + esc(f.notes) : ""}</div></div><button class="btn small" type="button" data-action="remove-fit" data-id="${esc(f.id)}">Remove</button></div>`; }).join("") : `<p class="note">None yet. When a tech finds a part that belongs here, add it.</p>`}
-            <button class="btn" type="button" data-action="add-fit" data-id="${esc(a.id)}">Add a part to this machine</button>
+            <button class="btn" type="button" data-action="add-fit" data-id="${esc(a.id)}">Add a part to this ${PM.isDepartment(a) ? "department" : "machine"}</button>
           </article>
           ${window.Floor ? Floor.assetPanels(a, esc) : ""}
           <article class="panel"><h2>Recent work</h2>
@@ -773,7 +789,7 @@
   function flagForm() {
     openSheet("Quick flag", `
       ${areaField("flagText", "What's going on?", "", "Dictate with Wispr Flow into this box, type it, or use Mic. This saves a draft work order to finish later.", "", "flag", "Bay 3 crane is grinding on the bridge travel…")}
-      <div class="g2"><div class="f"><label for="flagAsset">Equipment, if you know it</label>${sel("flagAsset", "", assetChoices("Not sure yet"))}</div>
+      <div class="g2"><div class="f"><label for="flagAsset">Equipment or department, if you know it</label>${sel("flagAsset", "", assetChoices("Not sure yet"))}</div>
         <div class="f"><label for="flagWho">Assign to</label>${sel("flagWho", ui.me, techChoices("Leave unassigned"))}</div></div>
       <div class="err" id="formErr" role="alert"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="flagSave">Save draft</button>`,
@@ -800,7 +816,7 @@
     const assetId = preset.assetId || w.assetId || "";
     openSheet(existing ? "Edit " + w.woNumber : "New work order", `
       <div class="f"><label for="wType">Type</label>${sel("wType", w.type || "Repair", PM.WO_TYPES.map(t => [t, t]))}</div>
-      <div class="f"><label for="wAsset">Equipment</label>${sel("wAsset", assetId, assetChoices("No machine — General / plant task, or a draft"))}</div>
+      <div class="f"><label for="wAsset">Equipment or department</label>${sel("wAsset", assetId, assetChoices("No machine — General / plant task, or a draft"))}</div>
       ${textField("wLoc", "Location / area", w.location || "", "Optional. Used when this job isn't on a machine, for example Break room.")}
       ${textField("wTitle", "Title", w.title || "", "Leave this blank if you're dictating the whole job into the box below. The first line becomes the title.")}
       ${areaField("wDesc", "What's wrong / what to do", w.description || "", WISPR, "", "description", "Turner hose is wet and the mast drifts when the line sits.")}
@@ -904,7 +920,7 @@
     const assetId = (wo && wo.assetId) || opts.assetId || "";
     openSheet("Log time", `
       <div class="f"><label for="tWho">Tech</label>${sel("tWho", ui.me, techChoices("Choose a tech…").slice(0))}</div>
-      ${wo ? `<p class="note">On ${esc(wo.woNumber)} · ${esc(wo.assetTag || (PM.isGeneral(wo) ? "No machine" : ""))} ${esc(wo.title)}</p>` : `<div class="f"><label for="tAsset">Equipment</label>${sel("tAsset", assetId, assetChoices())}</div>`}
+      ${wo ? `<p class="note">On ${esc(wo.woNumber)} · ${esc(wo.assetTag || (PM.isGeneral(wo) ? "No machine" : ""))} ${esc(wo.title)}</p>` : `<div class="f"><label for="tAsset">Equipment or department</label>${sel("tAsset", assetId, assetChoices())}</div>`}
       <div class="g2"><div class="f"><label for="tHours">Hours</label><input id="tHours" type="number" min="0" step="0.1" value="1"></div>
         <div class="f"><label for="tDate">Date</label><input id="tDate" type="date" value="${esc(PM.today())}"></div></div>
       ${areaField("tNote", "Note", "", "", "", "time-note", "What you spent the time on")}
@@ -919,34 +935,87 @@
       });
   }
 
-  function assetForm(existing) {
-    const a = existing || { status: "Running", metered: "no", meterType: "Hours" };
-    openSheet(existing ? "Edit " + a.tag : "New equipment", `
-      <div class="g2"><div class="f"><label for="aTag">Tag</label><input id="aTag" data-code="1" type="text" value="${esc(a.tag || "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="WL-1"></div>
+  function assetForm(existing, preset) {
+    const a = existing || { status: "Running", metered: "no", meterType: "Hours", kind: (preset && preset.kind) || "Machine" };
+    const dept = PM.isDepartment(a);
+    openSheet(existing ? "Edit " + a.tag : (dept ? "New department" : "New equipment"), `
+      <div class="f"><label for="aKind">Kind</label>${sel("aKind", PM.assetKind(a), PM.ASSET_KINDS.map(k => [k, k === "Department" ? "Department — holds parts for an area" : "Machine"]))}</div>
+      <div class="g2"><div class="f"><label for="aTag">Tag</label><input id="aTag" data-code="1" type="text" value="${esc(a.tag || "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="${dept ? "WALL" : "WL-1"}"></div>
         <div class="f"><label for="aName">Name</label><input id="aName" type="text" value="${esc(a.name || "")}" autocomplete="on"></div></div>
-      <div class="g2"><div class="f"><label for="aArea">Area</label><input id="aArea" type="text" value="${esc(a.area || "")}"></div>
+      <div class="g2"><div class="f"><label for="aArea">Area</label><input id="aArea" type="text" value="${esc(a.area || "")}" placeholder="${dept ? "Same as the department name" : ""}"></div>
         <div class="f"><label for="aType">Type</label><input id="aType" type="text" value="${esc(a.type || "")}"></div></div>
       <div class="g3"><div class="f"><label for="aMake">Make</label><input id="aMake" type="text" value="${esc(a.make || "")}"></div>
         <div class="f"><label for="aModel">Model</label><input id="aModel" type="text" value="${esc(a.model || "")}"></div>
         <div class="f"><label for="aYear">Year</label><input id="aYear" type="number" value="${esc(a.year || "")}"></div></div>
       <div class="f"><label for="aSerial">Serial</label><input id="aSerial" data-code="1" type="text" value="${esc(a.serial || "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></div>
       <div class="g2"><div class="f"><label for="aStatus">Status</label>${sel("aStatus", a.status || "Running", PM.ASSET_STATUSES.map(s => [s, s]))}</div>
-        <div class="f"><label for="aMetered">Meter</label>${sel("aMetered", a.metered === "yes" ? "yes" : "no", [["no", "No meter — calendar PM"], ["yes", "Has a meter"]])}</div></div>
+        <div class="f" id="aMeteredWrap"><label for="aMetered">Meter</label>${sel("aMetered", a.metered === "yes" ? "yes" : "no", [["no", "No meter — calendar PM"], ["yes", "Has a meter"]])}</div></div>
       <div class="g2" id="meterBits"><div class="f"><label for="aMType">Meter type</label>${sel("aMType", a.meterType || "Hours", PM.METER_TYPES.map(s => [s, s]))}</div>
         <div class="f"><label for="aMeter">Current reading</label><input id="aMeter" type="number" min="0" step="any" value="${esc(PM.hasNum(a.meter) ? a.meter : "")}"></div></div>
       <div class="f"><label for="aNotes">Notes</label><textarea id="aNotes" rows="3">${esc(a.notes || "")}</textarea></div>
       <div class="err" id="formErr"></div>`,
       `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="aSave">Save</button>`,
       () => {
-        const sync = () => { byId("meterBits").style.display = val("aMetered") === "yes" ? "" : "none"; };
-        byId("aMetered").addEventListener("change", sync); sync();
+        const sync = () => {
+          const department = val("aKind") === "Department";
+          byId("aMeteredWrap").style.display = department ? "none" : "";
+          byId("meterBits").style.display = !department && val("aMetered") === "yes" ? "" : "none";
+        };
+        byId("aMetered").addEventListener("change", sync);
+        byId("aKind").addEventListener("change", sync);
+        sync();
         focusField("aTag");
         let savedId = existing && existing.id;
         byId("aSave").addEventListener("click", busy(byId("aSave"), async () => {
+          const kind = val("aKind") === "Department" ? "Department" : "Machine";
           const result = PM.saveAsset(state, {
-            id: savedId, tag: val("aTag"), name: val("aName"), area: val("aArea"), type: val("aType"),
+            id: savedId, kind, tag: val("aTag"), name: val("aName"), area: val("aArea"), type: val("aType"),
             make: val("aMake"), model: val("aModel"), year: val("aYear"), serial: val("aSerial"), status: val("aStatus"),
-            metered: val("aMetered"), meterType: val("aMType"), meter: val("aMeter"), notes: val("aNotes")
+            metered: kind === "Department" ? "no" : val("aMetered"), meterType: val("aMType"), meter: val("aMeter"), notes: val("aNotes")
+          });
+          if (result.ok && result.assetId) savedId = result.assetId;
+          await commit(result, { hash: result.ok ? "#asset/" + result.assetId : "" });
+        }));
+      });
+  }
+
+  function departmentForm() {
+    const areas = PM.openDepartmentAreas(state);
+    const first = areas[0] || "";
+    openSheet("Department asset", `
+      <p class="note">This makes the department an asset, using the same area names already on the machines. Parts, work orders, and QR labels then work for it the same way they do for a machine.</p>
+      ${areas.length ? `<div class="f"><label for="dArea">Area already on a machine</label>${sel("dArea", first, [["", "Type a new department"]].concat(areas.map(a => [a, a])))}</div>` : `<p class="note">No areas are on the machines yet. Type the department name.</p>`}
+      <div class="g2"><div class="f"><label for="dTag">Tag</label><input id="dTag" data-code="1" type="text" value="${esc(first ? PM.suggestDepartmentTag(state, first) : "")}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" placeholder="WALL"></div>
+        <div class="f"><label for="dName">Department</label><input id="dName" type="text" value="${esc(first)}" autocomplete="on" placeholder="Wall build"></div></div>
+      <div class="f"><label for="dNotes">Notes</label><textarea id="dNotes" rows="2"></textarea></div>
+      <div class="err" id="formErr"></div>`,
+      `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="dSave">Save department</button>`,
+      () => {
+        const fill = () => {
+          const area = val("dArea");
+          if (!byId("dName")) return;
+          if (!area) {
+            if (byId("dName").dataset.filled === "1") { byId("dName").value = ""; byId("dName").dataset.filled = ""; }
+            if (byId("dTag").dataset.filled === "1") { byId("dTag").value = ""; byId("dTag").dataset.filled = ""; }
+            return;
+          }
+          byId("dName").value = area;
+          byId("dName").dataset.filled = "1";
+          byId("dTag").value = PM.suggestDepartmentTag(state, area);
+          byId("dTag").dataset.filled = "1";
+        };
+        if (byId("dArea")) byId("dArea").addEventListener("change", fill);
+        if (first) {
+          if (byId("dName")) byId("dName").dataset.filled = "1";
+          if (byId("dTag")) byId("dTag").dataset.filled = "1";
+        }
+        focusField(first ? "dNotes" : "dName");
+        let savedId = "";
+        byId("dSave").addEventListener("click", busy(byId("dSave"), async () => {
+          const name = val("dName").trim();
+          const result = PM.saveAsset(state, {
+            id: savedId, kind: "Department", tag: val("dTag"), name, area: val("dArea") || name,
+            type: "Department", metered: "no", status: "Running", notes: val("dNotes")
           });
           if (result.ok && result.assetId) savedId = result.assetId;
           await commit(result, { hash: result.ok ? "#asset/" + result.assetId : "" });
@@ -1086,12 +1155,13 @@
     const a = PM.assetById(state, assetId);
     const have = new Set(state.fits.filter(f => f.assetId === assetId).map(f => f.partId));
     const choices = state.parts.filter(p => !have.has(p.id));
-    if (!choices.length) { partForm(); toast("Every part is already on this machine, or there are no parts yet. Add a part, then link it."); return; }
+    const where = PM.isDepartment(a) ? "department" : "machine";
+    if (!choices.length) { partForm(); toast("Every part is already on this " + where + ", or there are no parts yet. Add a part, then link it."); return; }
     openSheet("Add a part to " + a.tag, `
       <div class="f"><label for="fPart">Part</label>${sel("fPart", choices[0].id, choices.map(p => [p.id, p.sku + " — " + p.name]))}</div>
-      <div class="f"><label for="fNote">Where it goes on this machine</label><input id="fNote" type="text" autocomplete="on" placeholder="Turner whip hose"></div>
+      <div class="f"><label for="fNote">Where it goes</label><input id="fNote" type="text" autocomplete="on" placeholder="${where === "department" ? "Shared on this department" : "Turner whip hose"}"></div>
       <div class="err" id="formErr"></div>`,
-      `<button class="btn" type="button" data-close>Close</button><button class="btn" type="button" id="fNew">New part</button><span class="sp"></span><button class="btn primary" type="button" id="fSave">Add to this machine</button>`,
+      `<button class="btn" type="button" data-close>Close</button><button class="btn" type="button" id="fNew">New part</button><span class="sp"></span><button class="btn primary" type="button" id="fSave">Add to this ${where}</button>`,
       () => {
         byId("fNew").addEventListener("click", () => partForm());
         byId("fSave").addEventListener("click", busy(byId("fSave"), () => commit(PM.saveFit(state, { partId: val("fPart"), assetId, notes: val("fNote"), addedBy: meName() }), { hash: "#asset/" + assetId })));
@@ -1251,7 +1321,7 @@
       const askMachine = p.needsAsset && !p.assetId;
       card.innerHTML = `<article class="panel"><p>Type <b>${esc(p.type)}</b></p>
         <p>${p.assetTag ? esc(p.assetTag + " " + p.assetName) : (p.type === PM.GENERAL_TYPE ? "No machine · General" : "No machine yet")}</p>
-        ${askMachine ? `<div class="f"><label for="voiceAsset">Which machine?</label>${sel("voiceAsset", "", assetChoices("No machine — save as General"))}<p class="hint">Leave this blank and Save stores it as a General / plant task.</p></div>` : ""}
+        ${askMachine ? `<div class="f"><label for="voiceAsset">Which machine or department?</label>${sel("voiceAsset", "", assetChoices("No machine — save as General"))}<p class="hint">Leave this blank and Save stores it as a General / plant task.</p></div>` : ""}
         ${p.location ? `<p>Location ${esc(p.location)}</p>` : ""}
         <p>${esc(p.description)}</p>
         <p>Priority ${esc(p.priority || "Normal")}${p.dueDate ? " · due " + esc(p.dueDate) : ""}</p>
@@ -1357,6 +1427,7 @@
     else if (action === "return-use") return commit(PM.returnUse(state, id));
     else if (action === "print-wo") printWo(id);
     else if (action === "new-asset") assetForm();
+    else if (action === "new-department") departmentForm();
     else if (action === "edit-asset") assetForm(PM.assetById(state, id));
     else if (action === "add-level") levelForm(id);
     else if (action === "edit-level") { const l = PM.levelById(state, id); levelForm(l.assetId, l); }
