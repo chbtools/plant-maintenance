@@ -71,7 +71,7 @@
     assetExtra(a, esc) {
       const bits = [];
       if (shown("qr")) bits.push(`<a class="btn" href="#labels/${esc(a.id)}">QR label</a>`);
-      if (shown("down")) {
+      if (shown("down") && !PM().isDepartment(a)) {
         const clock = (window.__floorState && window.__floorState.downtimeEvents) || [];
         const action = PM().downAction(a, clock);
         bits.push(`<button class="btn ${action === "up" ? "primary" : "danger"}" type="button" data-floor="${action}" data-id="${esc(a.id)}">${action === "up" ? "Back up" : "Machine down"}</button>`);

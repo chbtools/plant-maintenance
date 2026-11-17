@@ -16,6 +16,7 @@
   const WO_TYPES = ["Repair", "PM", "Inspection", "Project", "General / plant task"];
   const GENERAL_TYPE = "General / plant task";
   const ASSET_STATUSES = ["Running", "Down", "Idle", "Out of service"];
+  const ASSET_KINDS = ["Machine", "Department"];
   const METER_TYPES = ["Hours", "Cycles", "Miles"];
   const BASES = ["calendar", "meter", "both"];
   const SOURCES = ["typed", "voice", "pm"];
@@ -37,7 +38,7 @@
 
   const FIELDS = {
     techs: ["id", "name", "role", "phone", "email", "hourlyRate", "active", "notes", "createdAt"],
-    assets: ["id", "tag", "name", "area", "type", "make", "model", "year", "serial", "status", "metered", "meterType", "meter", "notes", "createdAt", "updatedAt"],
+    assets: ["id", "tag", "name", "area", "type", "make", "model", "year", "serial", "status", "metered", "meterType", "meter", "notes", "createdAt", "updatedAt", "kind"],
     levels: ["id", "assetId", "name", "basis", "everyDays", "everyMeter", "active", "notes", "createdAt"],
     pmTasks: ["id", "assetId", "levelId", "name", "instructions", "partsJson", "active", "lastCompletedAt", "lastMeter", "lastWoId", "createdAt"],
     workOrders: ["id", "woNumber", "assetId", "assetTag", "assetName", "title", "description", "type", "status", "priority", "assignedTo", "assignedName", "requestedBy", "dueDate", "openedDate", "completedDate", "downtimeHours", "meterAt", "workPerformed", "otherCost", "laborHours", "laborCost", "partsCost", "totalCost", "pmTaskId", "source", "voiceTranscript", "notes", "failureCode", "rootCause", "location", "createdAt", "updatedAt"],
@@ -136,6 +137,9 @@
   const taskById = (s, id) => byId(s.pmTasks, id);
   const woById = (s, id) => byId(s.workOrders, id);
   const isMetered = a => !!(a && yes(a.metered));
+  /* A blank kind is a machine. Older rows and older phones never stored one. */
+  const assetKind = a => (a && a.kind === "Department") ? "Department" : "Machine";
+  const isDepartment = a => assetKind(a) === "Department";
   const isActive = status => status !== "draft" && status !== "complete" && status !== "cancelled";
   const meterWord = a => { const t = (a && a.meterType) || "Hours"; if (/cycle/i.test(t)) return "cycles"; if (/mile/i.test(t)) return "miles"; return "hrs"; };
   const whoName = (s, wo) => { const t = wo && wo.assignedTo && techById(s, wo.assignedTo); return t ? t.name : (wo && wo.assignedName) || ""; };
@@ -453,16 +457,25 @@
       const existing = f.id && assetById(state, f.id);
       if (state.assets.some(a => a.tag.toLowerCase() === tag.toLowerCase() && a.id !== (existing && existing.id))) return fail("Tag " + tag + " is already in use.");
       const now = stamp(f);
-      const metered = yes(f.metered) ? "yes" : "no";
+      const kind = ASSET_KINDS.includes(f.kind) ? f.kind : assetKind(existing);
+      const metered = kind === "Department" ? "no" : (yes(f.metered) ? "yes" : "no");
+      const area = String(f.area || "").trim() || (kind === "Department" ? name : "");
       const asset = {
-        id: (existing && existing.id) || uid(), tag, name, area: String(f.area || "").trim(), type: String(f.type || "").trim(),
+        id: (existing && existing.id) || uid(), tag, name, area, type: String(f.type || "").trim(),
         make: String(f.make || "").trim(), model: String(f.model || "").trim(), year: hasNum(f.year) ? String(parseInt(f.year, 10)) : "",
         serial: String(f.serial || "").trim(), status: ASSET_STATUSES.includes(f.status) ? f.status : ((existing && existing.status) || "Running"),
         metered, meterType: METER_TYPES.includes(f.meterType) ? f.meterType : "Hours",
         meter: metered === "yes" ? (hasNum(f.meter) ? num(f.meter) : (existing && hasNum(existing.meter) ? num(existing.meter) : "")) : "",
-        notes: String(f.notes || "").trim(), createdAt: (existing && existing.createdAt) || now, updatedAt: now
+        notes: String(f.notes || "").trim(), createdAt: (existing && existing.createdAt) || now, updatedAt: now, kind
       };
       if (metered === "no") asset.meter = "";
+      if (kind === "Department") {
+        const key = area.toLowerCase();
+        const label = name.toLowerCase();
+        if (state.assets.some(a => a.id !== asset.id && isDepartment(a) && (String(a.name || "").trim().toLowerCase() === label || String(a.area || "").trim().toLowerCase() === key || String(a.name || "").trim().toLowerCase() === key))) {
+          return fail(name + " is already a department asset.");
+        }
+      }
       if (existing) Object.assign(existing, asset); else state.assets.push(asset);
       put(ops, "assets", existing || state.assets[state.assets.length - 1]);
       return { message: existing ? "Saved " + tag + "." : tag + " added.", assetId: asset.id };
@@ -584,7 +597,7 @@
   function saveFit(input, f) {
     return mutate(input, (state, ops) => {
       const part = partById(state, f.partId), asset = assetById(state, f.assetId);
-      if (!part || !asset) return fail("Pick both a part and a machine.");
+      if (!part || !asset) return fail("Pick both a part and a machine or department.");
       const existing = state.fits.find(x => x.partId === part.id && x.assetId === asset.id);
       if (existing) return { message: part.sku + " is already on " + asset.tag + "'s parts list.", fitId: existing.id };
       const fit = { id: uid(), partId: part.id, assetId: asset.id, notes: String(f.notes || "").trim(), addedBy: String(f.addedBy || "").trim(), createdAt: stamp(f) };
@@ -607,6 +620,36 @@
       }
       return { message: part.sku + " removed from inventory." };
     });
+  }
+  function openDepartmentAreas(state) {
+    const taken = new Set();
+    for (const a of state.assets || []) {
+      if (!isDepartment(a)) continue;
+      const area = String(a.area || a.name || "").trim().toLowerCase();
+      const name = String(a.name || "").trim().toLowerCase();
+      if (area) taken.add(area);
+      if (name) taken.add(name);
+    }
+    const areas = [];
+    for (const a of state.assets || []) {
+      if (isDepartment(a)) continue;
+      const area = String(a.area || "").trim();
+      if (!area || taken.has(area.toLowerCase())) continue;
+      if (!areas.some(x => x.toLowerCase() === area.toLowerCase())) areas.push(area);
+    }
+    return areas.sort((a, b) => a.localeCompare(b));
+  }
+  function suggestDepartmentTag(state, name) {
+    const base = String(name || "").trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 16) || "DEPT";
+    let tag = base;
+    let n = 2;
+    const taken = t => (state.assets || []).some(a => String(a.tag || "").toLowerCase() === t.toLowerCase());
+    while (taken(tag)) {
+      tag = (base + "-" + n).slice(0, 20);
+      n += 1;
+      if (n > 50) break;
+    }
+    return tag;
   }
   function deleteFit(input, id) {
     return mutate(input, (state, ops) => {
@@ -1597,12 +1640,12 @@
   }
 
   return {
-    STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, GENERAL_TYPE, ASSET_STATUSES, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
+    STATUSES, STATUS_LABEL, PRIORITIES, WO_TYPES, GENERAL_TYPE, ASSET_STATUSES, ASSET_KINDS, METER_TYPES, BASES, SOURCES, LEVEL_PRESETS, FIELDS,
     MAX_BATCH, chunkOps, planPartAbsolutes, syncNotices,
     num, hasNum, yes, round2, money, pad, today, addDays, daysBetween, startOfWeek, dayOf, fmtDate, fmtShort, uid, clone, inRange, emptyState,
-    nextOnHand, techById, assetById, partById, levelById, taskById, woById, isMetered, isActive, meterWord, whoName, priorityRank, isOverdueWo,
+    nextOnHand, techById, assetById, partById, levelById, taskById, woById, isMetered, assetKind, isDepartment, isActive, meterWord, whoName, priorityRank, isOverdueWo,
     parseParts, stockNote, intervalLabel, runRatePerDay, pmInfo, dueDateFor, woCosts, nextWoNumber,
-    saveTech, deleteTech, saveAsset, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
+    saveTech, deleteTech, saveAsset, openDepartmentAreas, suggestDepartmentTag, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
     saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
     generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
     PHOTO_MAX, acceptPhotoData, sensorAlertDue, sensorShouldStore, sensorAlertPlan, meterReadingOk, recentSensorLogs,
