@@ -870,3 +870,86 @@ test("a department is an asset that can hold parts, and a blank kind stays a mac
   assert.equal(fresh.state.assets[0].area, "Shipping");
   assert.equal(fresh.state.assets[0].kind, "Department");
 });
+
+test("one-off parts cost the work order without touching the parts list", () => {
+  const s = sample();
+  const wo = s.workOrders.find(w => w.status === "open" && w.assetId);
+  const before = PM.woCosts(s, wo.id);
+  const partsBefore = JSON.stringify(s.parts);
+  const r = PM.addOneOffPart(s, { workOrderId: wo.id, partNumber: "BRG-6205-2RS", description: "Sealed bearing", qty: 2, unitCost: 14.5, vendor: "Motion", now: DAY + "T10:00:00.000Z" });
+  assert.equal(r.ok, true, r.message);
+  const after = PM.woCosts(r.state, wo.id);
+  assert.equal(after.parts, PM.round2(before.parts + 29));
+  assert.equal(after.total, PM.round2(before.total + 29));
+  const saved = r.state.workOrders.find(w => w.id === wo.id);
+  assert.equal(saved.partsCost, after.parts);
+  assert.equal(saved.totalCost, after.total);
+  assert.equal(JSON.stringify(r.state.parts), partsBefore);
+  assert.ok(!r.state.parts.some(p => p.sku === "BRG-6205-2RS"));
+  assert.equal(r.state.uses.length, s.uses.length);
+  assert.equal(r.state.moves.length, s.moves.length);
+  assert.ok(!r.ops.some(o => o.collection === "parts" || o.collection === "uses" || o.collection === "moves"));
+  const line = r.ops.find(o => o.collection === "oneOffParts");
+  assert.deepEqual(Object.keys(line.data), PM.FIELDS.oneOffParts);
+  assert.equal(line.data.extended, 29);
+  assert.equal(line.data.assetId, wo.assetId);
+  assert.ok(r.ops.some(o => o.collection === "workOrders" && o.id === wo.id && o.data.partsCost === after.parts));
+  assert.match(PM.buildReports(r.state, { today: DAY }).find(x => x.id === "work").rows.find(x => x.woNumber === wo.woNumber).partsUsed, /BRG-6205-2RS Sealed bearing \(one-off\)/);
+});
+
+test("one-off parts check what was typed", () => {
+  const s = sample();
+  const wo = s.workOrders.find(w => w.status === "open");
+  const base = { workOrderId: wo.id, partNumber: "X-1", qty: 1, unitCost: 5 };
+  assert.equal(PM.addOneOffPart(s, Object.assign({}, base, { partNumber: "  " })).ok, false);
+  assert.equal(PM.addOneOffPart(s, Object.assign({}, base, { qty: 0 })).ok, false);
+  assert.equal(PM.addOneOffPart(s, Object.assign({}, base, { unitCost: "" })).ok, false);
+  assert.equal(PM.addOneOffPart(s, Object.assign({}, base, { unitCost: -1 })).ok, false);
+  assert.equal(PM.addOneOffPart(s, Object.assign({}, base, { workOrderId: "nope" })).ok, false);
+  assert.equal(PM.addOneOffPart(s, Object.assign({}, base, { unitCost: 0 })).ok, true);
+  const cancelled = PM.setWoStatus(s, { id: wo.id, status: "cancelled" });
+  assert.equal(PM.addOneOffPart(cancelled.state, base).ok, false);
+});
+
+test("one-off parts can be found by part number across work orders and removed", () => {
+  let s = sample();
+  const [a, b] = s.workOrders.filter(w => w.status === "open").slice(0, 2);
+  s = PM.addOneOffPart(s, { workOrderId: a.id, partNumber: "SOL-24VDC", description: "Coil", qty: 1, unitCost: 40, now: "2026-10-01T10:00:00.000Z" }).state;
+  s = PM.addOneOffPart(s, { workOrderId: b.id, partNumber: "sol-24vdc", description: "Coil", qty: 1, unitCost: 42, vendor: "Grainger", now: "2026-11-01T10:00:00.000Z" }).state;
+  s = PM.addOneOffPart(s, { workOrderId: b.id, partNumber: "FUSE-10A", qty: 3, unitCost: 2, now: "2026-11-02T10:00:00.000Z" }).state;
+  const hits = PM.oneOffHistory(s, "SOL-24");
+  assert.deepEqual(hits.map(h => h.woNumber), [b.woNumber, a.woNumber]);
+  assert.equal(hits[0].vendor, "Grainger");
+  assert.equal(PM.oneOffHistory(s, "grainger").length, 1);
+  assert.equal(PM.oneOffHistory(s, a.woNumber).length, 1);
+  assert.equal(PM.oneOffHistory(s).length, 3);
+  const rep = PM.buildReports(s, { today: DAY, from: "2026-11-01", to: DAY }).find(x => x.id === "oneoffs");
+  assert.equal(rep.rows.length, 2);
+  const costB = PM.woCosts(s, b.id).parts;
+  const line = s.oneOffParts.find(o => o.partNumber === "FUSE-10A");
+  const gone = PM.removeOneOffPart(s, line.id);
+  assert.equal(gone.ok, true);
+  assert.equal(PM.woCosts(gone.state, b.id).parts, PM.round2(costB - 6));
+  assert.deepEqual(gone.ops.find(o => o.collection === "oneOffParts"), { op: "delete", collection: "oneOffParts", id: line.id });
+  assert.equal(PM.removeOneOffPart(gone.state, line.id).ok, false);
+});
+
+test("one-off parts work on an older phone copy and go with a deleted draft", () => {
+  const s = sample();
+  delete s.oneOffParts;
+  const wo = s.workOrders.find(w => w.status === "draft");
+  assert.equal(PM.woCosts(s, wo.id).parts >= 0, true);
+  assert.deepEqual(PM.oneOffHistory(s), []);
+  const r = PM.addOneOffPart(s, { workOrderId: wo.id, partNumber: "GSKT-9", qty: 1, unitCost: 3 });
+  assert.equal(r.ok, true, r.message);
+  const del = PM.deleteDraft(r.state, wo.id);
+  assert.equal(del.ok, true, del.message);
+  assert.equal(del.state.oneOffParts.length, 0);
+  assert.ok(del.ops.some(o => o.op === "delete" && o.collection === "oneOffParts"));
+});
+
+test("the sheet keeps one-off parts on their own tab", () => {
+  const gs = fs.readFileSync(path.join(__dirname, "..", "Code.gs"), "utf8");
+  assert.match(gs, /const DATA = \[[^\]]*'oneOffParts'\]/);
+  assert.ok(PM.emptyState().oneOffParts);
+});

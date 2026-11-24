@@ -62,7 +62,10 @@
     warranties: ["id", "assetId", "vendor", "what", "expires", "notes", "createdAt"],
     outsideJobs: ["id", "assetId", "vendor", "estimate", "po", "cost", "status", "openedDate", "notes", "createdAt"],
     schedules: ["id", "date", "techId", "workOrderId", "pmTaskId", "note", "createdAt"],
-    reservations: ["id", "workOrderId", "pmTaskId", "partId", "qty", "status", "createdAt"]
+    reservations: ["id", "workOrderId", "pmTaskId", "partId", "qty", "status", "createdAt"],
+    /* Parts bought for one job that are not in the parts list. No stock is kept
+       for them. They cost the work order and stay searchable by part number. */
+    oneOffParts: ["id", "workOrderId", "assetId", "partNumber", "description", "qty", "unitCost", "extended", "vendor", "techId", "createdAt"]
   };
 
   const num = v => { const n = typeof v === "number" ? v : parseFloat(String(v == null ? "" : v).replace(/[$,]/g, "")); return isFinite(n) ? n : 0; };
@@ -110,8 +113,13 @@
   const emptyState = () => ({
     techs: [], assets: [], levels: [], pmTasks: [], workOrders: [], parts: [], fits: [], uses: [], timeLogs: [], readings: [], moves: [],
     settings: [], failureCodes: [], photos: [], downtimeEvents: [], checkTemplates: [], checkItems: [], inspections: [], inspectionLines: [],
-    sensorLimits: [], sensorLogs: [], lotoPoints: [], warranties: [], outsideJobs: [], schedules: [], reservations: []
+    sensorLimits: [], sensorLogs: [], lotoPoints: [], warranties: [], outsideJobs: [], schedules: [], reservations: [], oneOffParts: []
   });
+  /* A phone cache or sample saved before one-off parts existed has no list. */
+  function oneOffList(state) {
+    if (!Array.isArray(state.oneOffParts)) state.oneOffParts = [];
+    return state.oneOffParts;
+  }
 
   /* Stock changes travel as a delta or an absolute recount.
      Phones send the change, not the total, so two techs can pull parts
@@ -302,6 +310,7 @@
   function woCosts(state, woId) {
     let parts = 0, hours = 0, labor = 0;
     for (const u of state.uses) if (u.workOrderId === woId) parts += num(u.extended);
+    for (const o of (state.oneOffParts || [])) if (o.workOrderId === woId) parts += num(o.extended);
     for (const t of state.timeLogs) if (t.workOrderId === woId) {
       hours += num(t.hours);
       const tech = techById(state, t.techId);
@@ -781,6 +790,10 @@
         removeById(state.timeLogs, t.id);
         drop(ops, "timeLogs", t.id);
       }
+      for (const o of oneOffList(state).filter(o => o.workOrderId === wo.id).slice()) {
+        removeById(state.oneOffParts, o.id);
+        drop(ops, "oneOffParts", o.id);
+      }
       removeById(state.workOrders, wo.id);
       drop(ops, "workOrders", wo.id);
       return { message: wo.woNumber + " deleted.", touchWos: [] };
@@ -797,6 +810,62 @@
       if (wo) { wo.updatedAt = new Date().toISOString(); put(ops, "workOrders", wo); }
       return { message: "Returned " + use.qty + " × " + use.partSku + " to stock." };
     });
+  }
+
+  /* A one-off part goes on the work order only. It never touches the parts
+     list, stock counts, or moves. */
+  function addOneOffPart(input, f) {
+    return mutate(input, (state, ops) => {
+      f = f || {};
+      const wo = woById(state, f.workOrderId);
+      if (!wo) return fail("That work order was not found.");
+      if (wo.status === "cancelled") return fail("That work order is cancelled. Reopen it before adding parts.");
+      const partNumber = String(f.partNumber || "").trim();
+      const description = String(f.description || "").trim();
+      if (!partNumber) return fail("Enter the part number so it can be found again to reorder.");
+      const qty = round2(f.qty);
+      if (!(qty > 0)) return fail("Enter how many you used.");
+      if (!hasNum(f.unitCost)) return fail("Enter the unit cost. Use 0 if it was free.");
+      const unitCost = round2(f.unitCost);
+      if (unitCost < 0) return fail("Unit cost can't be negative.");
+      const now = stamp(f);
+      const line = {
+        id: f.id || uid(), workOrderId: wo.id, assetId: wo.assetId || "",
+        partNumber: partNumber.slice(0, 120), description: description.slice(0, 500), qty, unitCost,
+        extended: round2(qty * unitCost), vendor: String(f.vendor || "").trim().slice(0, 200),
+        techId: f.techId || "", createdAt: now
+      };
+      oneOffList(state).push(line);
+      put(ops, "oneOffParts", line);
+      wo.updatedAt = now;
+      put(ops, "workOrders", wo);
+      return { message: "Added one-off " + (qty !== 1 ? qty + " × " : "") + partNumber + " (" + money(line.extended) + ") to " + wo.woNumber + ".", oneOffId: line.id };
+    });
+  }
+  function removeOneOffPart(input, id) {
+    return mutate(input, (state, ops) => {
+      const line = oneOffList(state).find(o => o.id === id);
+      if (!line) return fail("That part line is already gone.");
+      const wo = woById(state, line.workOrderId);
+      removeById(state.oneOffParts, line.id);
+      drop(ops, "oneOffParts", line.id);
+      if (wo) { wo.updatedAt = stamp(); put(ops, "workOrders", wo); }
+      return { message: "Removed one-off " + line.partNumber + "." };
+    });
+  }
+  /* Newest first. q matches part number, description, vendor, WO #, or machine. */
+  function oneOffHistory(state, q) {
+    const want = String(q || "").trim().toLowerCase();
+    return (state.oneOffParts || []).map(o => {
+      const wo = woById(state, o.workOrderId);
+      const asset = assetById(state, o.assetId || (wo && wo.assetId));
+      return {
+        id: o.id, workOrderId: o.workOrderId, woNumber: wo ? wo.woNumber : "", woTitle: wo ? wo.title : "",
+        assetTag: asset ? asset.tag : "", date: dayOf(o.createdAt), partNumber: o.partNumber, description: o.description,
+        qty: num(o.qty), unitCost: num(o.unitCost), extended: num(o.extended), vendor: o.vendor || ""
+      };
+    }).filter(r => !want || [r.partNumber, r.description, r.vendor, r.woNumber, r.assetTag].join(" ").toLowerCase().includes(want))
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(a.partNumber).localeCompare(String(b.partNumber)));
   }
   function receiveStock(input, f) {
     return mutate(input, (state, ops) => {
@@ -1040,7 +1109,9 @@
   }
 
   function partsUsedText(state, woId) {
-    return state.uses.filter(u => u.workOrderId === woId).map(u => (num(u.qty) !== 1 ? u.qty + " × " : "") + u.partSku + " " + u.partName).join("; ");
+    const stocked = state.uses.filter(u => u.workOrderId === woId).map(u => (num(u.qty) !== 1 ? u.qty + " × " : "") + u.partSku + " " + u.partName);
+    const oneOff = (state.oneOffParts || []).filter(o => o.workOrderId === woId).map(o => (num(o.qty) !== 1 ? o.qty + " × " : "") + o.partNumber + (o.description ? " " + o.description : "") + " (one-off)");
+    return stocked.concat(oneOff).join("; ");
   }
   function techsOnWo(state, woId) {
     const names = [];
@@ -1088,6 +1159,11 @@
       return { asset: asset ? asset.tag + " " + asset.name : "", level: level ? level.name : "", task: t.name, basis: level ? level.basis : "", interval: intervalLabel(level, asset), lastDone: t.lastCompletedAt, lastMeter: hasNum(t.lastMeter) ? num(t.lastMeter) : "", suggested: info.suggestedDate || "", status: info.summary, openWo: info.openWoNumber, parts };
     }).sort((a, b) => String(a.asset).localeCompare(String(b.asset)) || String(a.task).localeCompare(String(b.task)));
 
+    const oneOffRows = oneOffHistory(state).filter(r => inRange(r.date, from, to)).map(r => {
+      const wo = woById(state, r.workOrderId);
+      return Object.assign({}, r, { status: wo ? (STATUS_LABEL[wo.status] || wo.status) : "" });
+    });
+
     const col = (key, label, kind) => ({ key, label, kind: kind || "text" });
     return [
       { id: "work", title: "Work orders", blurb: "Every work order opened in the range, with hours, parts, downtime, and cost.", columns: [
@@ -1111,6 +1187,10 @@
         col("reorderQty", "Reorder qty", "num"), col("unitCost", "Unit cost", "money"), col("stockValue", "Stock value now", "money"), col("qtyUsed", "Qty used", "num"),
         col("costUsed", "Cost used", "money"), col("fits", "Fits"), col("low", "Low stock")
       ], rows: partRows },
+      { id: "oneoffs", title: "One-off parts / reorder history", blurb: "Parts bought for a single job that are not in the parts list. Search them by part number from the Parts tab.", columns: [
+        col("date", "Date", "date"), col("partNumber", "Part number"), col("description", "Description"), col("vendor", "Vendor"), col("qty", "Qty", "num"),
+        col("unitCost", "Unit cost", "money"), col("extended", "Extended", "money"), col("woNumber", "WO #"), col("assetTag", "Asset"), col("woTitle", "Work order"), col("status", "WO status")
+      ], rows: oneOffRows },
       { id: "pm", title: "PM status", blurb: "Current preventive maintenance. The date range does not filter this list.", columns: [
         col("asset", "Asset"), col("level", "Level"), col("task", "Task"), col("basis", "Basis"), col("interval", "Interval"), col("lastDone", "Last done", "date"),
         col("lastMeter", "Meter at last PM", "num"), col("suggested", "Suggested due", "date"), col("status", "Status"), col("openWo", "Open WO"), col("parts", "Required parts")
@@ -1646,7 +1726,7 @@
     nextOnHand, techById, assetById, partById, levelById, taskById, woById, isMetered, assetKind, isDepartment, isActive, meterWord, whoName, priorityRank, isOverdueWo,
     parseParts, stockNote, intervalLabel, runRatePerDay, pmInfo, dueDateFor, woCosts, nextWoNumber,
     saveTech, deleteTech, saveAsset, openDepartmentAreas, suggestDepartmentTag, saveLevel, deleteLevel, saveTask, deleteTask, savePart, deletePart, saveFit, deleteFit,
-    saveWo, setWoStatus, deleteDraft, usePart, returnUse, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
+    saveWo, setWoStatus, deleteDraft, usePart, returnUse, addOneOffPart, removeOneOffPart, oneOffHistory, receiveStock, adjustStock, saveReading, saveTime, deleteTime,
     generatePm, generateDue, spendBetween, dashboard, buildReports, toCsv, sheetSafe, rangeBounds, compatibleParts, sortWork,
     PHOTO_MAX, acceptPhotoData, sensorAlertDue, sensorShouldStore, sensorAlertPlan, meterReadingOk, recentSensorLogs,
     isGeneral, dictationAllowsRender, parseVoiceWorkOrder, voiceCommand, applyVoiceCommand, acceptAssigneeSuggestion, declineAssigneeSuggestion, voiceSaveFields, voiceSummary

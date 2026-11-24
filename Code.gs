@@ -41,11 +41,14 @@ const COLUMNS = {
   outsideJobs: ['id', 'assetId', 'vendor', 'estimate', 'po', 'cost', 'status', 'openedDate', 'notes', 'createdAt'],
   schedules: ['id', 'date', 'techId', 'workOrderId', 'pmTaskId', 'note', 'createdAt'],
   reservations: ['id', 'workOrderId', 'pmTaskId', 'partId', 'qty', 'status', 'createdAt'],
+  // Parts bought for one job that are not in the parts list. No stock is kept.
+  // The tab is created the first time the app reads or saves, like every other tab.
+  oneOffParts: ['id', 'workOrderId', 'assetId', 'partNumber', 'description', 'qty', 'unitCost', 'extended', 'vendor', 'techId', 'createdAt'],
   applied: ['id', 'at', 'body']
 };
 
 const NUMERIC = ['hourlyRate', 'year', 'meter', 'everyDays', 'everyMeter', 'lastMeter', 'downtimeHours', 'meterAt', 'otherCost', 'laborHours', 'laborCost', 'partsCost', 'totalCost', 'onHand', 'reorderPoint', 'reorderQty', 'unitCost', 'qty', 'extended', 'hours', 'rate', 'reading', 'onHandAfter', 'digestHour', 'sort', 'minutes', 'low', 'high', 'value', 'cost'];
-const DATA = ['techs', 'assets', 'levels', 'pmTasks', 'workOrders', 'parts', 'fits', 'uses', 'timeLogs', 'readings', 'moves', 'settings', 'failureCodes', 'photos', 'downtimeEvents', 'checkTemplates', 'checkItems', 'inspections', 'inspectionLines', 'sensorLimits', 'sensorLogs', 'lotoPoints', 'warranties', 'outsideJobs', 'schedules', 'reservations'];
+const DATA = ['techs', 'assets', 'levels', 'pmTasks', 'workOrders', 'parts', 'fits', 'uses', 'timeLogs', 'readings', 'moves', 'settings', 'failureCodes', 'photos', 'downtimeEvents', 'checkTemplates', 'checkItems', 'inspections', 'inspectionLines', 'sensorLimits', 'sensorLogs', 'lotoPoints', 'warranties', 'outsideJobs', 'schedules', 'reservations', 'oneOffParts'];
 
 function doPost(e) {
   let p;
