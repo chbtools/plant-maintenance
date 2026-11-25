@@ -393,8 +393,15 @@
     else if (ui.workView === "unassigned") list = list.filter(w => PM.isActive(w.status) && !w.assignedTo);
     else if (ui.workView === "drafts") list = list.filter(w => w.status === "draft");
     else if (ui.workView === "done") list = list.filter(w => w.status === "complete" && w.completedDate >= PM.addDays(day, -90));
-    if (q) list = list.filter(w => [w.woNumber, w.title, w.description, w.assetTag, w.assetName, w.location, PM.whoName(state, w), w.voiceTranscript].join(" ").toLowerCase().includes(q));
+    if (q) list = list.filter(w => [w.woNumber, w.title, w.description, w.assetTag, w.assetName, w.location, PM.whoName(state, w), w.voiceTranscript, oneOffText(w.id)].join(" ").toLowerCase().includes(q));
     return ui.workView === "done" ? list.sort((a, b) => String(b.completedDate).localeCompare(String(a.completedDate))) : PM.sortWork(list, day);
+  }
+  function oneOffText(woId) {
+    return (state.oneOffParts || []).filter(o => o.workOrderId === woId).map(o => o.partNumber + " " + o.description + " " + o.vendor).join(" ");
+  }
+  function oneOffLine(o, removable) {
+    const each = PM.num(o.qty) !== 1 ? " · " + PM.money(o.unitCost) + " each" : "";
+    return `<div class="partline" data-oneoff="${esc(o.id)}"><div><b>${esc(o.qty)} × ${esc(o.partNumber)}</b> ${esc(o.description || "")} ${pill("info", "One-off")}<div class="note">${esc(PM.money(o.extended))}${esc(each)}${o.vendor ? " · " + esc(o.vendor) : ""}</div></div>${removable ? `<button class="btn small" type="button" data-action="remove-oneoff" data-id="${esc(o.id)}">Remove</button>` : ""}</div>`;
   }
   function workCards(list, day) {
     if (!list.length) return `<div class="empty"><h3>${ui.workView === "mine" && !ui.me ? "Choose your name" : "Nothing in this list"}</h3><p>${ui.workView === "drafts" ? "A quick flag lands here as a draft." : "Write a work order or flag something from the floor."}</p><button class="btn primary" type="button" data-action="new-wo">+ Work order</button></div>`;
@@ -434,6 +441,7 @@
     const asset = PM.assetById(state, w.assetId);
     const c = PM.woCosts(state, w.id);
     const uses = state.uses.filter(u => u.workOrderId === w.id);
+    const oneOffs = (state.oneOffParts || []).filter(o => o.workOrderId === w.id);
     const times = state.timeLogs.filter(t => t.workOrderId === w.id).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
     const comp = asset ? PM.compatibleParts(state, asset.id) : { linked: [], rest: [] };
     const day = PM.today();
@@ -451,7 +459,8 @@
             ${w.workPerformed ? `<h3>Work performed</h3><p class="prose">${esc(w.workPerformed)}</p>` : ""}
           </article>
           <article class="panel"><h2>Parts on this job</h2>
-            ${uses.length ? uses.map(u => `<div class="partline"><div><b>${esc(u.qty)} × ${esc(u.partSku)}</b> ${esc(u.partName)}<div class="note">${esc(PM.money(u.extended))}</div></div><button class="btn small" type="button" data-action="return-use" data-id="${esc(u.id)}">Return</button></div>`).join("") : `<p class="note">No parts used yet.</p>`}
+            ${uses.length || oneOffs.length ? uses.map(u => `<div class="partline"><div><b>${esc(u.qty)} × ${esc(u.partSku)}</b> ${esc(u.partName)}<div class="note">${esc(PM.money(u.extended))}</div></div><button class="btn small" type="button" data-action="return-use" data-id="${esc(u.id)}">Return</button></div>`).join("") + oneOffs.map(o => oneOffLine(o, w.status !== "cancelled")).join("") : `<p class="note">No parts used yet.</p>`}
+            ${w.status !== "cancelled" ? `<div class="actions"><button class="btn" type="button" data-action="add-oneoff" data-id="${esc(w.id)}">+ One-off part</button></div><p class="hint">For a part you bought for this job that isn't in the parts list. It adds to this job's cost and does not touch stock.</p>` : ""}
             ${asset ? `<h3>Parts that fit ${esc(asset.tag)}</h3>${comp.linked.length ? comp.linked.map(p => partRow(p, true)).join("") : `<p class="note">Nothing is linked to this machine yet. Add one from the list below, or from the asset.</p>`}
               <details><summary>Other stock</summary>${comp.rest.map(p => partRow(p, false)).join("") || `<p class="note">No other parts.</p>`}</details>` : `<p class="note">${PM.isGeneral(w) ? "This plant task isn't tied to a machine, so parts are picked from the full list when you edit the job." : "Pick the equipment on this draft and the parts that fit it will show up here."}</p>`}
           </article>
@@ -580,8 +589,8 @@
 
   function renderParts() {
     view.innerHTML = `
-      <div class="toolbar"><div class="chips"><button class="chip" type="button" data-pv="all" aria-pressed="${ui.partView === "all"}">All</button><button class="chip" type="button" data-pv="low" aria-pressed="${ui.partView === "low"}">Low stock</button></div>
-        <input class="grow" id="partQ" type="search" placeholder="Search part number or name" value="${esc(ui.partQ)}" aria-label="Search parts" autocomplete="on"><button class="btn" type="button" id="reorderBtn">Reorder CSV</button><button class="btn primary" type="button" data-action="new-part">+ Part</button></div>
+      <div class="toolbar"><div class="chips"><button class="chip" type="button" data-pv="all" aria-pressed="${ui.partView === "all"}">All</button><button class="chip" type="button" data-pv="low" aria-pressed="${ui.partView === "low"}">Low stock</button><button class="chip" type="button" data-pv="oneoff" aria-pressed="${ui.partView === "oneoff"}">One-off</button></div>
+        <input class="grow" id="partQ" type="search" placeholder="${ui.partView === "oneoff" ? "Search one-off part number, vendor, WO #" : "Search part number or name"}" value="${esc(ui.partQ)}" aria-label="Search parts" autocomplete="on">${ui.partView === "oneoff" ? "" : `<button class="btn" type="button" id="reorderBtn">Reorder CSV</button>`}<button class="btn primary" type="button" data-action="new-part">+ Part</button></div>
       <div id="partList">${partCards()}</div>`;
     view.querySelectorAll("[data-pv]").forEach(b => b.addEventListener("click", () => { ui.partView = b.dataset.pv; renderParts(); }));
     const reorderBtn = byId("reorderBtn");
@@ -593,7 +602,15 @@
     });
     attachMics(view);
   }
+  /* One-off parts / reorder history. Each line opens the work order it was bought for. */
+  function oneOffCards() {
+    const rows = PM.oneOffHistory(state, ui.partQ);
+    if (!rows.length) return `<div class="empty"><h3>${ui.partQ ? "No one-off part matches" : "No one-off parts yet"}</h3><p>Add one from a work order with + One-off part. They show up here so you can find the part number to reorder.</p></div>`;
+    return `<p class="note">One-off parts are not in the parts list and keep no stock. Newest first.</p><div class="cards">${rows.map(r => `<a class="card" href="#wo/${esc(r.workOrderId)}"><div class="card-top"><span class="tag">${esc(r.partNumber)}</span><span class="title">${esc(r.description || "No description")}</span></div>
+          <div class="meta"><span>${esc(PM.fmtShort(r.date))}</span><span>${esc(r.qty)} × ${esc(PM.money(r.unitCost))}</span>${r.vendor ? `<span>${esc(r.vendor)}</span>` : ""}<span class="mono">${esc(r.woNumber || "WO gone")}</span>${r.assetTag ? `<span>${esc(r.assetTag)}</span>` : ""}</div></a>`).join("")}</div>`;
+  }
   function partCards() {
+    if (ui.partView === "oneoff") return oneOffCards();
     const q = ui.partQ.toLowerCase();
     let list = state.parts.slice().sort((a, b) => (PM.num(a.onHand) <= PM.num(a.reorderPoint) ? 0 : 1) - (PM.num(b.onHand) <= PM.num(b.reorderPoint) ? 0 : 1) || String(a.sku).localeCompare(String(b.sku)));
     if (ui.partView === "low") list = list.filter(p => PM.num(p.onHand) <= PM.num(p.reorderPoint));
@@ -1252,10 +1269,12 @@
     const a = PM.assetById(state, w.assetId) || {};
     const c = PM.woCosts(state, w.id);
     const uses = state.uses.filter(u => u.workOrderId === w.id);
+    const oneOffs = (state.oneOffParts || []).filter(o => o.workOrderId === w.id);
+    const partBits = uses.map(u => u.qty + " × " + u.partSku).concat(oneOffs.map(o => o.qty + " × " + o.partNumber + " (one-off" + (o.vendor ? ", " + o.vendor : "") + ")"));
     document.getElementById("printArea").innerHTML = `<div style="font-family:Arial,sans-serif;padding:16px"><h1 style="margin:0">Work order ${esc(w.woNumber)}</h1>
       <p>${esc(w.assetTag)} ${esc(w.assetName)} · ${esc(PM.STATUS_LABEL[w.status])} · ${esc(PM.whoName(state, w) || "Unassigned")}</p>
       <p><b>${esc(w.title)}</b></p><p style="white-space:pre-wrap">${esc(w.description || "")}</p>
-      <p>Parts: ${esc(uses.map(u => u.qty + " × " + u.partSku).join(", ") || "none")} · ${esc(PM.money(c.parts))}</p>
+      <p>Parts: ${esc(partBits.join(", ") || "none")} · ${esc(PM.money(c.parts))}</p>
       <p>Labor ${esc(c.laborHours)} h · ${esc(PM.money(c.labor))} · Other ${esc(PM.money(c.other))} · <b>Total ${esc(PM.money(c.total))}</b></p>
       <p>Downtime ${esc(w.downtimeHours || 0)} h ${PM.isMetered(a) && PM.hasNum(w.meterAt) ? "· Meter " + esc(w.meterAt) : ""}</p>
       <p style="white-space:pre-wrap">${esc(w.workPerformed || "")}</p></div>`;
@@ -1274,6 +1293,46 @@
       if (fit.ok) result = { ok: true, state: fit.state, ops: result.ops.concat(fit.ops), message: result.message + " " + fit.message };
     }
     await commit(result);
+  }
+
+  function oneOffForm(woId) {
+    const w = PM.woById(state, woId);
+    if (!w) { toast("That work order was not found."); return; }
+    openSheet("One-off part on " + w.woNumber, `<p class="note">For a part bought for this job only. It is not added to the parts list and no stock is kept. Find it later under Parts → One-off.</p>
+      <div class="f"><label for="oPn">Part number</label><input id="oPn" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Number on the box or invoice"><p class="hint" id="oPnHint"></p></div>
+      <div class="f"><label for="oDesc">Description</label><input id="oDesc" type="text" autocomplete="on" autocapitalize="sentences" placeholder="What it is"></div>
+      <div class="g2"><div class="f"><label for="oQty">Quantity</label><input id="oQty" type="number" inputmode="decimal" min="0" step="any" value="1"></div>
+        <div class="f"><label for="oCost">Unit cost ($)</label><input id="oCost" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00"></div></div>
+      <div class="f"><label for="oVendor">Vendor (optional)</label><input id="oVendor" type="text" autocomplete="on" placeholder="Where it came from"></div>
+      <p class="note">Line total <b class="num" id="oTotal">${esc(PM.money(0))}</b></p>
+      <div class="err" id="formErr"></div>`,
+      `<button class="btn" type="button" data-close>Close</button><span class="sp"></span><button class="btn primary" type="button" id="oSave">Add to ${esc(w.woNumber)}</button>`,
+      () => {
+        focusField("oPn");
+        const total = () => { const el = byId("oTotal"); if (el) el.textContent = PM.money(PM.num(val("oQty")) * PM.num(val("oCost"))); };
+        byId("oQty").addEventListener("input", total);
+        byId("oCost").addEventListener("input", total);
+        /* Same part number again: offer the last description, cost, and vendor. Nothing typed is overwritten. */
+        byId("oPn").addEventListener("change", () => {
+          const pn = val("oPn").trim().toLowerCase();
+          const hint = byId("oPnHint");
+          if (hint) hint.textContent = "";
+          if (!pn) return;
+          const stocked = state.parts.find(p => String(p.sku).trim().toLowerCase() === pn);
+          const last = PM.oneOffHistory(state).find(r => String(r.partNumber).trim().toLowerCase() === pn);
+          if (last) {
+            if (!val("oDesc")) byId("oDesc").value = last.description || "";
+            if (!val("oCost")) byId("oCost").value = last.unitCost;
+            if (!val("oVendor")) byId("oVendor").value = last.vendor || "";
+            total();
+            if (hint) hint.textContent = "Bought before on " + (last.woNumber || "a work order") + " (" + PM.fmtShort(last.date) + "). Check the cost is still right.";
+          }
+          if (stocked && hint) hint.textContent = (hint.textContent ? hint.textContent + " " : "") + stocked.sku + " is in the parts list. Use it from stock on this job if it came off the shelf.";
+        });
+        byId("oSave").addEventListener("click", busy(byId("oSave"), () => commit(PM.addOneOffPart(state, {
+          workOrderId: woId, partNumber: val("oPn"), description: val("oDesc"), qty: val("oQty"), unitCost: val("oCost"), vendor: val("oVendor"), techId: ui.me
+        }), { hash: "#wo/" + woId })));
+      });
   }
 
   let voiceSession = null;
@@ -1406,7 +1465,7 @@
     catch (e) { voiceSession = null; toast("The mic isn't available. Type the work order instead."); }
   }
 
-  const SAVE_ACTIONS = { "delete-draft": 1, "assign-me": 1, "use-part": 1, "return-use": 1, "delete-level": 1, "remove-fit": 1, "delete-part": 1, "delete-time": 1, sync: 1 };
+  const SAVE_ACTIONS = { "delete-draft": 1, "assign-me": 1, "use-part": 1, "return-use": 1, "remove-oneoff": 1, "delete-level": 1, "remove-fit": 1, "delete-part": 1, "delete-time": 1, sync: 1 };
   view.addEventListener("click", e => {
     const btn = e.target.closest("[data-action]");
     if (!btn || !view.contains(btn) || btn.dataset.busy === "1") return;
@@ -1425,6 +1484,8 @@
     else if (action === "log-meter") meterForm(id, btn.dataset.wo || (route().name === "wo" ? route().id : ""));
     else if (action === "use-part") return onUse(id);
     else if (action === "return-use") return commit(PM.returnUse(state, id));
+    else if (action === "add-oneoff") oneOffForm(id);
+    else if (action === "remove-oneoff") return commit(PM.removeOneOffPart(state, id));
     else if (action === "print-wo") printWo(id);
     else if (action === "new-asset") assetForm();
     else if (action === "new-department") departmentForm();

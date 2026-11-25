@@ -114,6 +114,8 @@ Do this when the crew should all see the same jobs. It takes about 15 minutes. T
 
 Each phone keeps a copy so the lists come up even on a weak signal. New saves go to the sheet. If the sheet can't be reached, the page says so, and the change stays on that phone until the sheet answers. A wrong plant code works the same way: the change waits until the right code is entered. It does not disappear. If the sheet refuses a save outright, that one is not retried forever. A phone that is newer than the script is different: a save the old script does not know (it answers "unknown collection") stays on the phone, and the page says the script needs an update. Nothing is dropped while you still need to redeploy. The page says it was not kept, and later saves can still go through. Two people can use parts at the same time: the app sends the change in quantity, not a fresh total, so the second save doesn't put the old count back. Two phones opening work orders at the same moment get different WO- numbers from the sheet, after the updated script is deployed.
 
+**One-off parts.** On a work order, **+ One-off part** records a part you bought for that job that isn't in the parts list (part number, description, quantity, unit cost, and vendor if you want). It adds to the job's parts cost and never touches stock. Find it again under **Parts → One-off** (search by part number, vendor, or WO #), in the Work search, or in **Reports → One-off parts / reorder history**.
+
 On-hand in the **parts** tab of the sheet is the live count. Change stock from the app (Receive, Use, or Correct the count). You can sort and filter the sheet, but don't rename the tabs or the header row.
 
 ### What's in the sheet
@@ -143,6 +145,7 @@ On-hand in the **parts** tab of the sheet is the live count. Change stock from t
 | outsideJobs | Vendor repairs: estimate, PO, cost, status |
 | schedules | Who has which job on which day |
 | reservations | Parts kit reserved when a PM work order opens |
+| oneOffParts | One-off parts bought for a single job: part number, description, qty, unit cost, vendor. Not in the parts list, no stock kept |
 
 New tabs appear the first time the updated script runs (open the app, or run **setup** once from the editor). New columns are added to the end of an existing tab. Don't rename the header row.
 
